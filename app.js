@@ -151,8 +151,35 @@ function syncPayload(state){
        (els IDs del banc de biblioteca són aleatoris per dispositiu) */
     p._recipeNames={};
     (state.recipes||[]).forEach(r=>{p._recipeNames[r.id]=r.name;});
+    /* identitat LOCAL de cada terminal: no viatja (sinó els dos dispositius
+       es disputen el "currentUser" i la comparació de push no convergeix) */
+    delete p.currentUser;
+    delete p.anonymous;
     return p;
   }catch(e){return state;}
+}
+/* normalitza: l'ordre de claus NO pot decidir "hi ha canvis" (sinó dos
+   dispositius amb el mateix contingut entrarien en bucle de pushes) */
+function _stable(v){
+  if(Array.isArray(v))return v.map(_stable);
+  if(v&&typeof v==='object'){
+    const o={};
+    Object.keys(v).sort().forEach(k=>{o[k]=_stable(v[k]);});
+    return o;
+  }
+  return v;
+}
+/* signatura de comparació per decidir "hi ha canvis pendents de puxar".
+   Treu _syncedAt (canvia a cada save), _recipeNames (derivat) i settings
+   (clau API local): tots tres provocarien un push a cada cicle sense fi. */
+function pushSig(o){
+  try{
+    const p=syncPayload(o);
+    delete p._syncedAt;
+    delete p._recipeNames;
+    delete p.settings;
+    return JSON.stringify(_stable(p));
+  }catch(e){return String(Math.random());}
 }
 
 function pullFromGist() {
@@ -169,12 +196,13 @@ function pullFromGist() {
   })
   .then(gist => {
     const content = gist.files['midweek-state.json']?.content;
-    if (!content) return null;
+    if (!content) return null;   /* gist buit */
     return JSON.parse(content);
   })
   .catch(err => {
     console.warn('Could not pull from Gist:', err);
-    return null;
+    return undefined; /* ERROR de xarxa: diferent de null (gist buit) — el
+                         cicle de sync NO farà push cec si no pot pull */
   });
 }
 
@@ -204,32 +232,170 @@ function pushToGist(state) {
   });
 }
 
+/* ===== timestamps per entitat + tombstones =====
+   Cada col·lecció porta a S._lm['<coll>:<id>'] l'hora de l'última edició i a
+   S._del['<coll>:<id>'] l'hora de l'esborrat. Sense això el merge (unió per
+   id) fa reviure tot allò que un dispositiu esborra, i qui fa qualsevol
+   save guanya TOTS els camps només per tenir _syncedAt més gran. */
+function _lmSet(coll,id){
+  S._lm=S._lm||{};S._del=S._del||{};
+  S._lm[coll+':'+id]=Date.now();
+  delete S._del[coll+':'+id];
+}
+function _delSet(coll,id){
+  S._lm=S._lm||{};S._del=S._del||{};
+  S._del[coll+':'+id]=Date.now();
+  delete S._lm[coll+':'+id];
+}
+/* snapshot de les col·leccions compartides (sense fotos) per detectar els
+   canvis locals a save() i stampar-los automàticament: cap punt d'edició
+   de la UI s'ha de preocupar de marcar res */
+function _stripPhoto(a){
+  return (a||[]).map(x=>{
+    if(!x||!x.photo)return x;
+    const c=Object.assign({},x);delete c.photo;return c;
+  });
+}
+function _curCols(){
+  return {
+    menu:S.menu||{},
+    recipes:(S.recipes||[]).filter(r=>!r.book),
+    people:S.people||[],
+    receipts:_stripPhoto(S.receipts),
+    shoppingLists:S.shoppingLists||[],
+    items:((S.shopping&&S.shopping.items)||[]),
+    categories:S.categories||[],
+    settlements:S.settlements||[],
+    balanceAdjusts:S.balanceAdjusts||[],
+    diners:S.diners
+  };
+}
+let _lastSnap=null;
+function refreshSnap(){try{_lastSnap=JSON.stringify(_curCols());}catch(e){_lastSnap=null;}}
+/* marca _lm als canviats i _del als desapareguts respecte a l'anterior snapshot */
+function stampLocalChanges(){
+  if(_lastSnap===null)return;
+  let prev;try{prev=JSON.parse(_lastSnap);}catch(e){return;}
+  const now=Date.now();
+  S._lm=S._lm||{};S._del=S._del||{};
+  /* array per id/nom */
+  const cmp=(coll,prevArr,curArr,keyOf)=>{
+    if(!Array.isArray(prevArr)||!Array.isArray(curArr))return;
+    const pm=new Map(prevArr.map(x=>[keyOf(x),x]));
+    const cm=new Map(curArr.map(x=>[keyOf(x),x]));
+    cm.forEach((v,k)=>{
+      const p=pm.get(k);
+      if(!p||JSON.stringify(p)!==JSON.stringify(v))_lmSet(coll,k);
+    });
+    pm.forEach((v,k)=>{if(!cm.has(k))_delSet(coll,k);});
+  };
+  /* objecte clau->valor (menú) */
+  const cmpKV=(coll,prevObj,curObj)=>{
+    if(!prevObj||typeof prevObj!=='object'||!curObj||typeof curObj!=='object')return;
+    const cm=new Set(Object.keys(curObj));
+    Object.keys(curObj).forEach(k=>{
+      const p=prevObj[k];
+      if(!p||JSON.stringify(p)!==JSON.stringify(curObj[k]))_lmSet(coll,k);
+    });
+    Object.keys(prevObj).forEach(k=>{if(!cm.has(k))_delSet(coll,k);});
+  };
+  const c=_curCols();
+  cmpKV('menu',prev.menu,c.menu);
+  cmp('recipe',prev.recipes,c.recipes,r=>r.id);
+  cmp('person',prev.people,c.people,p=>p.id);
+  cmp('receipt',prev.receipts,c.receipts,r=>r.id);
+  cmp('list',prev.shoppingLists,c.shoppingLists,l=>l.id);
+  cmp('item',prev.items,c.items,i=>i.id);
+  cmp('cat',prev.categories,c.categories,x=>x);
+  cmp('settlement',prev.settlements,c.settlements,s=>JSON.stringify(s));
+  cmp('adjust',prev.balanceAdjusts,c.balanceAdjusts,a=>JSON.stringify(a));
+  if(prev.diners!==c.diners)S._dinersT=now;
+}
+
 /* merge intel·ligent per claus: cap dispositiu esborra el que l'altre ha afegit */
 function mergeStates(local, remote) {
   if (!remote) return local;
   if (!local) return remote;
   const rNewer=(remote._syncedAt||0)>=(local._syncedAt||0);
   const out=JSON.parse(JSON.stringify(local));
-  /* menú: unió de claus; mateixa clau modificada als dos -> guanya el més recent */
-  const menu=Object.assign({},local.menu||{});
-  Object.keys(remote.menu||{}).forEach(k=>{
-    if(!menu[k])menu[k]=remote.menu[k];
-    else if(JSON.stringify(menu[k])!==JSON.stringify(remote.menu[k])) menu[k]=rNewer?remote.menu[k]:menu[k];
+  /* _lm / _del fusionats amb max PER CLAU: la memòria d'edicions i
+     d'esborrats viatja, i cap dispositiu perd el seu timestamp local
+     (Object.assign donaria prioritat al remot i el reversionaria) */
+  const _max=(a,b)=>{const o=Object.assign({},a||{});Object.keys(b||{}).forEach(k=>{o[k]=Math.max(o[k]||0,b[k]||0);});return o;};
+  out._lm=_max(local._lm,remote._lm);
+  out._del=_max(local._del,remote._del);
+  out._dinersT=Math.max(local._dinersT||0,remote._dinersT||0);
+  const lmOf=(s,k)=>(s._lm&&s._lm[k])||0;
+  const delOf=(s,k)=>(s._del&&s._del[k])||0;
+  /* decideix QUIN valor sobreviu per a la clau <coll>:<id>:
+     - als dos: guanya qui l'ha editat més tard (_lm); sense _lm -> rNewer
+     - només local: esborrat remot més recent que la meva edició? -> mort
+     - només remot: jo l'he esborrat més tard que la seva edició? -> mort   */
+  function pick(coll,id,lHas,rHas,lVal,rVal){
+    const k=coll+':'+id;
+    const lT=lmOf(local,k),rT=lmOf(remote,k);
+    const lD=delOf(local,k),rD=delOf(remote,k);
+    if(lHas&&rHas){
+      if(lT===0&&rT===0)return rNewer?rVal:lVal;
+      return rT>lT?rVal:lVal;
+    }
+    if(lHas){ if(rD>lT)return undefined; return lVal; }
+    if(rHas){ if(lD>rT)return undefined; return rVal; }
+    return undefined;
+  }
+  function mergeArr(coll,lArr,rArr,keyOf,adopt){
+    const lm=new Map((lArr||[]).map(x=>[keyOf(x),x]));
+    const rm=new Map((rArr||[]).map(x=>[keyOf(x),x]));
+    const ids=new Set([...lm.keys(),...rm.keys()]);
+    const outA=[];
+    ids.forEach(id=>{
+      const v=pick(coll,id,lm.has(id),rm.has(id),lm.get(id),rm.get(id));
+      if(v===undefined)return;
+      const o=lm.get(id),r=rm.get(id);
+      /* adopt rep (local, remot, GUANYADOR) i només pot enriquir-lo, mai
+         substituir-lo: sinó el merge revertiria qui ha guanyat el conflicte */
+      outA.push((o&&r&&adopt)?adopt(o,r,v):v);
+    });
+    return outA;
+  }
+  /* quan guanya el REMOT, preserva els passos i la foto locals (el gist no
+     puja fotos; els passos no viatgen per la línia de1MB) */
+  function keepMedia(l,r,v){
+    if(v!==r)return v;      /* guanya el local (o no hi ha conflicte) */
+    if(!l)return r;
+    const o=Object.assign({},r);
+    if(!o.photo&&l.photo)o.photo=l.photo;
+    if((!o.steps||!o.steps.length)&&l.steps&&l.steps.length)o.steps=l.steps;
+    return o;
+  }
+  function keepList(l,r){
+    const base=Object.assign({},(lmNewer('list',l.id,l,r)?r:l));
+    const im=new Map((l.items||[]).map(i=>[i.id,i]));
+    (r.items||[]).forEach(i=>{
+      const ex=im.get(i.id);
+      im.set(i.id,ex?Object.assign({},ex,i,{done:!!(ex.done||i.done)}):i);
+    });
+    base.items=Array.from(im.values());
+    return base;
+  }
+  function lmNewer(coll,id,l,r){
+    const k=coll+':'+id;
+    return lmOf(remote,k)>lmOf(local,k);
+  }
+  /* menú: unió de claus resolta per clau */
+  const menu={};
+  new Set([...Object.keys(local.menu||{}),...Object.keys(remote.menu||{})]).forEach(k=>{
+    const v=pick('menu',k,!!(local.menu&&local.menu[k]),!!(remote.menu&&remote.menu[k]),
+                local.menu&&local.menu[k],remote.menu&&remote.menu[k]);
+    if(v!==undefined)menu[k]=v;
   });
   out.menu=menu;
-  /* receptes pròpies: unió per id (duplicat -> es queda la versió local).
-     Les de biblioteca NO s'importen del gist (hi han pogut arribar en payloads vells). */
-  const ids=new Set((local.recipes||[]).map(r=>r.id));
-  const recipes=(local.recipes||[]).slice();
-  (remote.recipes||[]).forEach(r=>{if(!ids.has(r.id)&&!r.book){recipes.push(r);ids.add(r.id);}});
-  out.recipes=recipes;
-  /* tiquets: unió per id (original) */
-  const rids=new Set((local.receipts||[]).map(r=>r.id));
-  const receipts=(local.receipts||[]).slice();
-  (remote.receipts||[]).forEach(r=>{if(!rids.has(r.id)){receipts.push(r);rids.add(r.id);}});
-  receipts.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
-  out.receipts=receipts;
-  /* liquidacions: unió */
+  /* receptes pròpies: per id; les de biblioteca NO s'importen del gist */
+  out.recipes=mergeArr('recipe',(local.recipes||[]), (remote.recipes||[]).filter(r=>!r.book), r=>r.id, keepMedia);
+  /* tiquets: per id */
+  out.receipts=mergeArr('receipt',local.receipts,remote.receipts,r=>r.id,keepMedia);
+  out.receipts.sort((a,b)=>(b.date||'').localeCompare(a.date||''));
+  /* liquidacions i ajustos: unió (els resets són rars; el balanç es congela igualment) */
   const skey=st=>[st.date,st.fromId,st.toId,st.amount].join('|');
   const skeys=new Set((local.settlements||[]).map(skey));
   const settlements=(local.settlements||[]).slice();
@@ -241,23 +407,29 @@ function mergeStates(local, remote) {
   const balAdj=(local.balanceAdjusts||[]).slice();
   (remote.balanceAdjusts||[]).forEach(a=>{if(!akeys.has(ak(a))){balAdj.push(a);akeys.add(ak(a));}});
   out.balanceAdjusts=balAdj;
-  /* llistes de compra independents: unió per id; items per id amb done-union */
-  const lmap={};
-  (local.shoppingLists||[]).forEach(l=>lmap[l.id]=JSON.parse(JSON.stringify(l)));
-  (remote.shoppingLists||[]).forEach(rl=>{
-    if(!lmap[rl.id]){lmap[rl.id]=JSON.parse(JSON.stringify(rl));return;}
-    const L=lmap[rl.id];
-    const im={};
-    (L.items||[]).forEach(i=>im[i.id]=i);
-    (rl.items||[]).forEach(i=>{
-      if(!im[i.id])im[i.id]=i;
-      else if(i.done&&!im[i.id].done)im[i.id].done=true;
+  /* llistes de compra: per id (_lm/_del) + fusió d'items amb done-union */
+  {
+    const lm=new Map((local.shoppingLists||[]).map(l=>[l.id,l]));
+    const rm=new Map((remote.shoppingLists||[]).map(l=>[l.id,l]));
+    const outL=[];
+    new Set([...lm.keys(),...rm.keys()]).forEach(id=>{
+      const v=pick('list',id,lm.has(id),rm.has(id),lm.get(id),rm.get(id));
+      if(v===undefined)return;
+      const L=lm.get(id),R=rm.get(id);
+      if(!L||!R){outL.push(v);return;}
+      /* els dos la tenen: items en unió amb done-union, camps segons _lm */
+      const base=Object.assign({},v);
+      const im=new Map((L.items||[]).map(i=>[i.id,i]));
+      (R.items||[]).forEach(i=>{
+        const ex=im.get(i.id);
+        im.set(i.id,ex?Object.assign({},ex,i,{done:!!(ex.done||i.done)}):i);
+      });
+      base.items=Array.from(im.values());
+      if(R.createdBy&&!base.createdBy)base.createdBy=R.createdBy;
+      outL.push(base);
     });
-    L.items=Object.values(im);
-    if(rl.createdBy&&!L.createdBy)L.createdBy=rl.createdBy;
-    L.name=L.name||rl.name;
-  });
-  out.shoppingLists=Object.values(lmap);
+    out.shoppingLists=outL;
+  }
   /* llista de la compra: unió per id; done si qualsevol dispositiu la marca */
   const iMap={};
   ((local.shopping&&local.shopping.items)||[]).forEach(i=>iMap[i.id]=i);
@@ -266,22 +438,22 @@ function mergeStates(local, remote) {
     else if(i.done&&!iMap[i.id].done)iMap[i.id].done=true;
   });
   out.shopping={items:Object.values(iMap),stale:!!((local.shopping&&local.shopping.stale)||(remote.shopping&&remote.shopping.stale))};
-  /* categories: unió */
-  const cats=(local.categories||[]).slice();
-  (remote.categories||[]).forEach(c=>{if(!cats.includes(c))cats.push(c);});
-  out.categories=cats;
-  /* camps simples: guanya l'estat més recent */
-  out.diners=rNewer?(remote.diners||local.diners):local.diners;
-  /* people: merge per ID (uneix, no reemplaça); NOMÉS adopta el nom/color remot
-     si l'estat remot és MÉS RECENT (rNewer) — l'últim editor guanya, cap dispositiu
-     perd canvis per un gist més vell */
-  const peopleMap=new Map((local.people||[]).map(p=>[p.id,p]));
-  (remote.people||[]).forEach(rp=>{
-    const lp=peopleMap.get(rp.id);
-    if(!lp)peopleMap.set(rp.id,rp);
-    else if(rNewer){lp.name=rp.name;lp.color=rp.color;lp.pin=rp.pin||lp.pin;}
-  });
-  out.people=Array.from(peopleMap.values());
+  /* categories: unió resolta per _lm/_del (esborrar-la a A la treu de B) */
+  {
+    const cs=new Set([...(local.categories||[]),...(remote.categories||[])]);
+    out.categories=Array.from(cs).filter(c=>{
+      const k='cat:'+c;
+      const lHas=(local.categories||[]).includes(c);
+      const rHas=(remote.categories||[]).includes(c);
+      return pick('cat',c,lHas,rHas,c,c)!==undefined;
+    });
+  }
+  /* camp simple: guanya qui l'ha editat més tard (_dinersT) */
+  out.diners=((remote._dinersT||0)>(local._dinersT||0))?(remote.diners||local.diners):local.diners;
+  /* people: merge per ID amb _lm/_del — l'últim editor guanya, i el que un
+     dispositiu esborra, esborrat es queda (sense adopt: el guanyador de
+     pick ja és l'objecte sencer correcte) */
+  out.people=mergeArr('person',local.people,remote.people,p=>p.id);
   out._syncedAt=Math.max(local._syncedAt||0,remote._syncedAt||0);
   /* mapa de noms: local + remot, per resoldre recipeIds aliens en render */
   const names=Object.assign({},remote._recipeNames||{},local._recipeNames||{});
@@ -293,32 +465,80 @@ function mergeStates(local, remote) {
 function applyRemote(remote){
   if(!remote)return false;
   const merged=mergeStates(S,remote);
-  /* signatura: detecta canvis en TOT el que viatja —
-     people COMPLET (inclou COLOR), balanceAdjusts, llistes... recipes: length
-     (els EDITS de recepta pròpia viatgen via merge per id dins mergeStates) */
+  /* signatura: detecta canvis en TOT el que viatja — people COMPLET (COLOR),
+     _lm/_del (edicions i esborrats), llistes, i les receptes pròpies pel seu
+     contingut (abans només la longitud: un EDIT no es detectava mai) */
   const sig=o=>JSON.stringify([
-    o.menu||{},o.recipes&&o.recipes.length,o.receipts||[],o.settlements||[],
+    o.menu||{},
+    (o.recipes||[]).filter(r=>!r.book).map(r=>r.id+'|'+r.name+'|'+r.category+'|'+r.time+'|'+r.servings+'|'+JSON.stringify(r.ingredients||[])),
+    o.receipts||[],o.settlements||[],
     o.shoppingLists||[],o.shopping||{},o.categories||[],o.diners,
-    (o.people||[]).map(p=>p.id+'|'+p.name+'|'+p.color),o.balanceAdjusts||[]
+    (o.people||[]).map(p=>p.id+'|'+p.name+'|'+p.color),
+    o.balanceAdjusts||[],o._lm||{},o._del||{},o._dinersT||0
   ]);
   if(sig(merged)===sig(S))return false;
   Object.keys(merged).forEach(k=>{if(k!=='ui')S[k]=merged[k];});
-  save(); /* desa localment + puja la fusió perquè l'altre dispositiu convergir */
+  /* persisteix localment sense stampar com a local (els _lm/_del ja venen
+     del remot) ni re-programar: el push el fa el runSync que ens ha cridat */
+  persistLocal();
+  if(!_syncRunning)scheduleSync(); /* crida aïllada (tests/debug): assegura push */
   return true;
 }
 
+/* ===== cicle de sync: pull -> merge -> push (mai push a cegues) =====
+   Abans save() feia pushToGist(S) directament: si B escrivia sense haver
+   rebut l'últim d'A, el blob vell de B ESBOBRAVA els canvis d'A del gist.
+   Ara tot passa per runSync, que primer incorpora l'estat remot. */
+/* dispositiu FRESH (localStorage buit a l'arrencada): el seed local crea
+   receptes/menú amb ids propis i _lm = ara, així que el merge els donaria
+   prioritat sobre l'estat ja existent del gist (pèrdua de dades a l'altre
+   costat). En aquest cas ADOPTA l'estat remot sencer. */
+let WAS_FRESH=false;
+try{WAS_FRESH=!localStorage.getItem(LS_KEY);}catch(e){}
+function adoptRemote(remote){
+  ['settings','currentUser','anonymous'].forEach(k=>{delete remote[k];});
+  Object.keys(remote).forEach(k=>{S[k]=remote[k];});
+  persistLocal();
+}
 let syncIntervalId = null;
+let _syncRunning=false, _syncQueued=false, _syncTimer=null;
+function runSync(){
+  if(!GIST_OK)return Promise.resolve(false);
+  if(_syncRunning){_syncQueued=true;return Promise.resolve(false);}
+  _syncRunning=true;
+  return pullFromGist().then(remote=>{
+    /* undefined = error de xarxa -> NO push (evita ceguesa); null = gist buit */
+    if(remote===undefined)return false;
+    let changed=false;
+    if(remote&&WAS_FRESH){
+      /* primer contacte amb un gist ja poblat: adopta-ho tot (el meu seed
+         local no té per què barrejar-s'hi ni guanyar-li) */
+      adoptRemote(remote);WAS_FRESH=false;changed=true;
+    } else if(remote)changed=applyRemote(remote);
+    /* push només si el payload local difereix del remot (hi ha canvis
+       locals pendents de puxar, o el merge ha produit quelcom nou).
+       pushSig ignora _syncedAt: sinó cada cicle empenyria un push buit. */
+    const localSig=pushSig(S);
+    const remoteSig=remote?pushSig(remote):null;
+    if(localSig!==remoteSig){
+      return pushToGist(S).then(()=>changed).catch(()=>changed);
+    }
+    return changed;
+  }).catch(e=>{console.warn('sync error:',e);return false;}).finally(()=>{
+    _syncRunning=false;
+    if(_syncQueued){_syncQueued=false;scheduleSync(0);}
+  });
+}
+function scheduleSync(delay){
+  if(!GIST_OK)return;
+  clearTimeout(_syncTimer);
+  _syncTimer=setTimeout(()=>{runSync().then(changed=>{if(changed)try{boot(false);}catch(e){}});},
+                       delay==null?600:delay);
+}
 function startPeriodicSync(intervalMs = 30000) {
   stopPeriodicSync();
-  syncIntervalId = setInterval(async () => {
-    try {
-      const remote = await pullFromGist();
-      if (remote && applyRemote(remote)) {
-        try{boot(false);}catch(e){}
-      }
-    } catch (e) {
-      console.warn('Periodic sync error:', e);
-    }
+  syncIntervalId = setInterval(()=>{
+    runSync().then(changed=>{if(changed)try{boot(false);}catch(e){}});
   }, intervalMs);
 }
 function stopPeriodicSync() {
@@ -329,15 +549,20 @@ function stopPeriodicSync() {
 }
 async function initialSync() {
   try {
-    const remote = await pullFromGist();
-    if (remote && applyRemote(remote)) {
-      try{boot(false);}catch(e){}
-    }
+    const changed=await runSync();
+    if(changed){try{boot(false);}catch(e){}}
   } catch (e) {
     console.warn('Initial sync failed:', e);
   }
   startPeriodicSync();
 }
+/* actualització automàtica en tornar a primer pla / obrir l'app:
+   el setInterval de 30s pot estar suspès al mòbil; en recuperar l'app cal
+   pull immediat (és exactament "quan obres la app") */
+document.addEventListener('visibilitychange',()=>{
+  if(!document.hidden)scheduleSync(0);
+});
+window.addEventListener('pageshow',()=>scheduleSync(0));
 
 /* ============ estat + persistència ============ */
 
@@ -347,15 +572,29 @@ S.shopping=S.shopping&&Array.isArray(S.shopping.items)?S.shopping:{items:[],stal
 S.settings=Object.assign({apiKey:(window.MIDWEEK_OPENROUTER_KEY||''),model:'google/gemini-2.5-flash'},S.settings);
 /* models trencats desats -> gemini 2.5 flash (única opció vàlida) */
 if(['nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free','google/gemma-4-26b-a4b-it:free','google/gemma-3-27b-it:free'].indexOf(S.settings.model)>=0){S.settings.model='google/gemini-2.5-flash';}
+/* snapshot de referència: sense ell el primer save() no detectaria res */
+try{refreshSnap();}catch(e){}
 
 function save(){
   try{
     S._syncedAt=Date.now();
+    /* 1) marca els canvis locals (_lm/_del) respecte a l'anterior snapshot */
+    stampLocalChanges();
+    /* 2) persisteix localment */
     localStorage.setItem(LS_KEY,JSON.stringify(S));
+    refreshSnap();
     flashSync(true);
-    /* push al Gist només si hi ha credencials; mai bloqueja ni trenca el clic */
-    if(GIST_OK)pushToGist(S).catch(e=>console.warn('Gist push failed:',e));
+    /* 3) pull -> merge -> push diferit: MAI push a cegues (abans esborrava
+          els canvis que l'altre dispositiu hagués pogut fer al gist) */
+    scheduleSync();
   }catch(e){console.error(e);try{flashSync(false);}catch(e2){}}
+}
+/* persisteix localment sense re-programar sync (ús dins d'un runSync) */
+function persistLocal(){
+  try{
+    localStorage.setItem(LS_KEY,JSON.stringify(S));
+    refreshSnap();
+  }catch(e){console.warn(e);}
 }
 let flashT=null;
 function flashSync(ok){

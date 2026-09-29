@@ -916,11 +916,17 @@ function boot(doSeed){
   renderBalance();
   renderCatChips();
   try{renderGistCfg();}catch(e){}
-    /* identitat: auto-login si el dispositiu ja la coneix; modal si no */
+    /* identitat: auto-login si el dispositiu ja la coneix; modal SOLO al
+       boot inicial — en els re-renders del sync (boot(false)) NO es pot
+       obrir ni re- cridar setIdentity (disparava save()+push innecessaris) */
     try{
       const u=getMyIdentity();
-      if(u&&personById(u.id)){setIdentity(u.id);}
-      else {openIdentityModal();}
+      if(u&&personById(u.id)){
+        if(S.currentUser!==u.id)setIdentity(u.id);
+        else renderIdentity();
+      }
+      else if(doSeed){openIdentityModal();}
+      else{renderIdentity();}
     }catch(e){}
   try{renderLists();}catch(e){}
   const info=$('#storageInfo');
