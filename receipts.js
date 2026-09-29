@@ -786,7 +786,20 @@ function renderGistCfg(){
   const cfg=(typeof getGistCfg==='function')?getGistCfg():null;
   $('#gistIdInput').value=(cfg&&cfg.gistId)||'';
   $('#gistTokenInput').value=(cfg&&cfg.token)||'';
-  $('#gistStatus').textContent=cfg?'✓ Sincronització activa amb aquest Gist.':'Sense credencials: cada dispositiu va per lliure.';
+  updateGistStatus();
+}
+/* només l'estat: NO toca els camps del formulari (l'usuari hi pot estar
+   escrivint un token nou quan arriba la detecció d'error) */
+function updateGistStatus(){
+  const el=$('#gistStatus');if(!el)return;
+  if(typeof AUTH_BROKEN!=='undefined'&&AUTH_BROKEN){
+    el.textContent='⚠ GitHub rebutja les credencials (token invàlid o sense l\u2019àmbit gist): genera\u2019n un de nou a GitHub → Settings → Developer settings → Personal access tokens (àmbit gist) i enganxa\u2019l aquí. Mentrestant aquest dispositiu LLEGEIX el gist però no hi pot escriure.';
+    el.style.color='#C77D46';
+    return;
+  }
+  el.style.color='';
+  const cfg=(typeof getGistCfg==='function')?getGistCfg():null;
+  el.textContent=cfg?'✓ Sincronització activa amb aquest Gist.':'Sense credencials: cada dispositiu va per lliure.';
 }
 $('#gistSaveBtn').onclick=()=>{
   const id=$('#gistIdInput').value.trim(), tok=$('#gistTokenInput').value.trim();

@@ -182,52 +182,92 @@ function pushSig(o){
   }catch(e){return String(Math.random());}
 }
 
+/* 401 = token invàlid; 403 = permisos insuficients. Abans això quedava en un
+   console.warn silenciós i l'usuari creia que sincronitzava: ara AUTH_BROKEN
+   ho deixa visible a Opcions i a l'etiqueta de sync. El pull es reintentar
+   SENSE token perquè el gist es pot llegir per URL secreta. */
+let AUTH_BROKEN=false;
+/* Un fetch que mai resol (mòbil, xarxa inestable, tall de cobertura) deixaria
+   _syncing=true per sempre i ATURARIA la sincronització fins al següent
+   recàrrega de la pàgina. Timeout obligatori. */
+function _fetchTO(url,opts,ms){
+  if(typeof AbortController==='undefined')return fetch(url,opts);
+  const c=new AbortController();
+  const t=setTimeout(()=>{try{c.abort();}catch(e){}},ms||15000);
+  const o=Object.assign({},opts,{signal:c.signal});
+  return fetch(url,o).finally(()=>clearTimeout(t));
+}
+function _markAuthBroken(){
+  const was=AUTH_BROKEN;
+  AUTH_BROKEN=true;
+  try{if(typeof updateGistStatus==='function')updateGistStatus();}catch(e){}
+  if(was)return;
+  /* l'etiqueta del header ho diu a l'instant, sense esperar un save */
+  try{
+    const dot=document.getElementById('syncDot'),lab=document.getElementById('syncLabel');
+    if(lab)lab.textContent='⚠ Token invàlid';
+    if(dot)dot.classList.add('err');
+  }catch(e){}
+}
 function pullFromGist() {
   if(!GIST_OK)return Promise.resolve(null);
-  return fetch(`https://api.github.com/gists/${GIST_CFG.gistId}`, {
-    headers: {
-      Authorization: `Bearer ${GIST_CFG.token}`,
-      Accept: 'application/vnd.github+json'
-    }
-  })
-  .then(r => {
-    if (!r.ok) throw new Error(`GitHub error ${r.status}`);
-    return r.json();
-  })
-  .then(gist => {
-    const content = gist.files['midweek-state.json']?.content;
-    if (!content) return null;   /* gist buit */
-    return JSON.parse(content);
-  })
-  .catch(err => {
-    console.warn('Could not pull from Gist:', err);
-    return undefined; /* ERROR de xarxa: diferent de null (gist buit) — el
-                         cicle de sync NO farà push cec si no pot pull */
-  });
+  const url=`https://api.github.com/gists/${GIST_CFG.gistId}`;
+  /* User-Agent: GitHub la REBUTJA (403 "Request forbidden by administrative
+     rules") sense aquest header. Els navegadors l'eliminen sols i envien el
+     seu; en node/JSDOM (tests) és l'única que arriba. */
+  const UA='midweek/'+((typeof APP_VERSION!=='undefined')?APP_VERSION:'app');
+  const authHeaders={Authorization:`token ${GIST_CFG.token}`,Accept:'application/vnd.github+json','User-Agent':UA};
+  const anonHeaders={Accept:'application/vnd.github+json','User-Agent':UA};
+  return _fetchTO(url,{headers:authHeaders})
+    .then(r=>{
+      if(r.status===401||r.status===403){
+        /* credencial rebutjada / sense permís: prova SENSE token (el gist es
+           pot llegir per URL secreta). Si el retry funciona, llegim igualment
+           i deixem AUTH_BROKEN marcat: es pot LLEGIR però no ESCRIURE. */
+        _markAuthBroken();
+        return _fetchTO(url,{headers:anonHeaders}).then(r2=>(r2&&r2.ok)?r2:r);
+      }
+      return r;
+    })
+    .then(r=>{
+      if(!r.ok)throw new Error(`GitHub error ${r.status}`);
+      return r.json();
+    })
+    .then(gist=>{
+      const content=gist.files['midweek-state.json']?.content;
+      if(!content)return null;   /* gist buit */
+      return JSON.parse(content);
+    })
+    .catch(err=>{
+      console.warn('Could not pull from Gist:',err);
+      return undefined; /* ERROR de xarxa: diferent de null (gist buit) — el
+                           cicle de sync NO farà push cec si no pot pull */
+    });
 }
 
 function pushToGist(state) {
   if(!GIST_OK)return Promise.resolve(null);
-  const data = JSON.stringify(syncPayload(state));
-  return fetch(`https://api.github.com/gists/${GIST_CFG.gistId}`, {
-    method: 'PATCH',
-    headers: {
-      Authorization: `Bearer ${GIST_CFG.token}`,
-      Accept: 'application/vnd.github+json',
-      'Content-Type': 'application/json'
+  const data=JSON.stringify(syncPayload(state));
+  return _fetchTO(`https://api.github.com/gists/${GIST_CFG.gistId}`, {
+    method:'PATCH',
+    headers:{
+      Authorization:`token ${GIST_CFG.token}`,
+      Accept:'application/vnd.github+json',
+      'Content-Type':'application/json',
+      'User-Agent':((typeof APP_VERSION!=='undefined')?'midweek/'+APP_VERSION:'midweek')
     },
-    body: JSON.stringify({
-      files: {
-        'midweek-state.json': { content: data }
-      }
-    })
+    body:JSON.stringify({files:{'midweek-state.json':{content:data}}})
   })
-  .then(r => {
-    if (!r.ok) throw new Error(`GitHub error ${r.status}`);
+  .then(r=>{
+    if(r.status===401||r.status===403){
+      _markAuthBroken();
+      throw new Error('GitHub '+r.status+' — token invàlid o sense permisos de gist');
+    }
+    if(!r.ok)throw new Error(`GitHub error ${r.status}`);
     return r.json();
   })
-  .catch(err => {
-    console.warn('Could not push to Gist:', err);
+  .catch(err=>{
+    console.warn('Could not push to Gist:',err);
     throw err;
   });
 }
@@ -600,8 +640,8 @@ let flashT=null;
 function flashSync(ok){
   const dot=$('#syncDot'),lab=$('#syncLabel');
   if(!dot)return;
-  dot.classList.toggle('err',!ok);
-  lab.textContent=ok?'Desat ✓':'Error!';
+  dot.classList.toggle('err',!ok||AUTH_BROKEN);
+  lab.textContent=AUTH_BROKEN?'⚠ Token invàlid':(ok?'Desat ✓':'Error!');
   clearTimeout(flashT);
   flashT=setTimeout(()=>{dot.classList.remove('err');lab.textContent='Local';},1400);
 }
