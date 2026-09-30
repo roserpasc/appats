@@ -456,6 +456,7 @@ $('#receiptsList').addEventListener('click',e=>{
   }
   const dl=e.target.closest('[data-delrc]');
   if(dl&&confirm('Eliminar aquesta compra del registre?')){
+    pushBackup('Eliminar un tiquet del registre');
     /* CONGELA el balanç: elimina el tiquet però compensa el canvi amb ajustos,
        perquè el balanç només es mogui quan s'AFEGEIX un tiquet o es liquida. */
     const balAbans=balanceSnapshot();
@@ -665,9 +666,27 @@ $('#apiKeyInput').oninput=debounce(e=>{
 },400);
 $('#modelSelect').value=S.settings.model||'google/gemini-2.5-flash';
 $('#modelSelect').onchange=e=>{S.settings.model=e.target.value;save();toast('Model: '+e.target.value);};
+/* botons de recuperació de còpies de seguretat (delegació) */
+(function(){
+  const box=document.getElementById('backupList');if(!box)return;
+  box.addEventListener('click',e=>{
+    const b=e.target.closest('[data-restore]');if(!b)return;
+    restoreBackup(+b.dataset.restore);
+  });
+})();
+
 /* ============================================================
    IDENTITAT: login/anònim/crear — sense PIN, memòria per dispositiu
    ============================================================ */
+/* botons de recuperació de còpies de seguretat (delegació) */
+(function(){
+  const box=document.getElementById('backupList');if(!box)return;
+  box.addEventListener('click',e=>{
+    const b=e.target.closest('[data-restore]');if(!b)return;
+    restoreBackup(+b.dataset.restore);
+  });
+})();
+
 const IDENTITY_KEY='midweek_identity';
 function getMyIdentity(){
   try{const v=JSON.parse(localStorage.getItem(IDENTITY_KEY));if(v&&v.id)return v;}catch(e){}
@@ -835,6 +854,7 @@ $('#importBankBtn').onclick=()=>{
    Les receptes del menú que referenciïn una de biblioteca queden com a àpat sense fitxa. */
 $('#restoreBankBtn').onclick=()=>{
   if(!confirm('Això esborrarà les '+S.recipes.filter(r=>r.book).length+' receptes de biblioteca i les tornarà a importar traduïdes i amb fotos. Els àpats del menú es mantindran però si obres la seva fitxa caldrà tornar-los a assignar. Continuar?'))return;
+  pushBackup('Restaurar la biblioteca de receptes');
   S.recipes=S.recipes.filter(r=>!r.book);
   const n=importTraditionalBank();
   toast('Biblioteca restaurada: '+n+' receptes ✓');
@@ -845,6 +865,7 @@ $('#importFile').addEventListener('change',async e=>{
   try{
     const data=JSON.parse(await f.text());
     if(!confirm('Substituir totes les dades actuals pel fitxer importat?'))return;
+    pushBackup('Importar un fitxer JSON');
     S=Object.assign(defaultState(),data);
     save();boot(false);
     toast('Importació feta ✓');
@@ -853,6 +874,7 @@ $('#importFile').addEventListener('change',async e=>{
 });
 $('#wipeBtn').onclick=()=>{
   if(confirm('ESBORRAR-HO TOT? Aquesta acció no es pot desfer.')){
+    pushBackup('Esborrar-ho tot');
     localStorage.removeItem(LS_KEY);
     location.reload();
   }
@@ -911,7 +933,10 @@ function boot(doSeed){
 
   try{S.recipes.forEach(ensureTags);}catch(e){}
   try{if(typeof migrateCorpusCategories==='function')migrateCorpusCategories();}catch(e){}
-  /* deep-link opcional: ?tab=receipts */
+  /* SEMPRE entres al Menú en obrir l'app (la pestanya recordada no mana).
+     El deep-link ?tab= segueix tenint prioritat perquè els tests i els
+     enllaços interns en depenen. */
+  if(doSeed)S.ui.tab='menu';
   try{
     const q=new URLSearchParams(location.search).get('tab');
     if(q&&['menu','recipes','shop','receipts','settings'].includes(q))S.ui.tab=q;
@@ -929,6 +954,8 @@ function boot(doSeed){
   renderBalance();
   renderCatChips();
   try{renderGistCfg();}catch(e){}
+  try{renderSyncInfo();}catch(e){}
+  try{renderBackups();}catch(e){}
     /* identitat: auto-login si el dispositiu ja la coneix; modal SOLO al
        boot inicial — en els re-renders del sync (boot(false)) NO es pot
        obrir ni re- cridar setIdentity (disparava save()+push innecessaris) */

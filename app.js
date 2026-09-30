@@ -235,11 +235,13 @@ function pullFromGist() {
     })
     .then(gist=>{
       const content=gist.files['midweek-state.json']?.content;
+      try{noteSync(true,'pull');}catch(e){}
       if(!content)return null;   /* gist buit */
       return JSON.parse(content);
     })
     .catch(err=>{
       console.warn('Could not pull from Gist:',err);
+      try{noteSync(false,'pull',err&&err.message||String(err));}catch(e){}
       return undefined; /* ERROR de xarxa: diferent de null (gist buit) — el
                            cicle de sync NO farà push cec si no pot pull */
     });
@@ -264,10 +266,12 @@ function pushToGist(state) {
       throw new Error('GitHub '+r.status+' — token invàlid o sense permisos de gist');
     }
     if(!r.ok)throw new Error(`GitHub error ${r.status}`);
+    try{noteSync(true,'push');}catch(e){}
     return r.json();
   })
   .catch(err=>{
     console.warn('Could not push to Gist:',err);
+    try{noteSync(false,'push',err&&err.message||String(err));}catch(e){}
     throw err;
   });
 }
@@ -618,6 +622,8 @@ try{refreshSnap();}catch(e){}
 function save(){
   try{
     S._syncedAt=Date.now();
+    /* punt de restauració automàtic (com a mínim cada 3 minuts) */
+    try{autoBackupIfDue();}catch(e){}
     /* 1) marca els canvis locals (_lm/_del) respecte a l'anterior snapshot */
     stampLocalChanges();
     /* 2) persisteix localment */
@@ -645,6 +651,120 @@ function flashSync(ok){
   clearTimeout(flashT);
   flashT=setTimeout(()=>{dot.classList.remove('err');lab.textContent='Local';},1400);
 }
+
+/* ============ INFO D'ÚLTIMA ACTUALITZACIÓ (Opcions, a baix de tot) ============
+   L'usuari ha de poder comprovar si la sincronització ha funcionat i qui
+   l'ha feta, sense obrir la consola. */
+const SYNCINFO_KEY='midweek_syncinfo';
+function noteSync(ok,dir,detail){
+  try{
+    const prev=JSON.parse(localStorage.getItem(SYNCINFO_KEY)||'{}');
+    const who=(S.currentUser&&personById(S.currentUser))?personById(S.currentUser).name:'An\u00f2nim';
+    const info={ts:Date.now(),by:who,dir:dir,ok:!!ok,detail:detail||''};
+    localStorage.setItem(SYNCINFO_KEY,JSON.stringify({
+      lastOk:ok?info:(prev&&prev.lastOk)||null,
+      lastPushOk:((ok&&dir==='push')?info:(prev&&prev.lastPushOk))||null,
+      last:info
+    }));
+    if(typeof renderSyncInfo==='function')renderSyncInfo();
+  }catch(e){}
+}
+function fmtDataHora(ts){
+  try{return new Date(ts).toLocaleString('ca-ES',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});}
+  catch(e){return new Date(ts).toLocaleString();}
+}
+function renderSyncInfo(){
+  const el=document.getElementById('syncInfo');if(!el)return;
+  let info=null;try{info=JSON.parse(localStorage.getItem(SYNCINFO_KEY)||'null');}catch(e){}
+  if(!info){el.textContent='Encara no s\u2019ha sincronitzat des d\u2019aquest dispositiu.';return;}
+  let html='';
+  if(info.lastPushOk)html+='\ud83d\udce4 <b>\u00daltima pujada correcta:</b> '+fmtDataHora(info.lastPushOk.ts)+' \u00b7 feta per <b>'+esc(info.lastPushOk.by)+'</b><br>';
+  else html+='\ud83d\udce4 Encara no s\u2019ha pujat cap canvi des d\u2019aquest dispositiu.<br>';
+  const l=info.last;
+  if(l.ok)html+='\u2705 \u00daltima comprovaci\u00f3: '+fmtDataHora(l.ts)+' \u00b7 '+esc(l.by)+' \u00b7 '+(l.dir==='push'?'pujada al gist':'baixada del gist');
+  else html+='\u26a0 <b>\u00daltim intent fallit:</b> '+fmtDataHora(l.ts)+' \u00b7 '+esc(l.detail||'error de xarxa');
+  el.innerHTML=html;
+}
+
+/* ============ C\u00d2PIES DE SEGURETAT \u2014 5 \u00daltIMS CANVIS ============
+   Guarda l'estat ABANS d'una acci\u00f3 destructiva (esborrar llista, recepta,
+   tiquet\u2026) i un punt autom\u00e0tic cada 3 minuts. Restaurar neteja _del/_lm:
+   si no, les tombstones de l'esborrat tornarien a matar el que recuperem. */
+const BACKUP_KEY='midweek_backups';
+function getBackups(){try{const l=JSON.parse(localStorage.getItem(BACKUP_KEY)||'[]');return Array.isArray(l)?l:[];}catch(e){return [];}}
+function setBackups(list){
+  try{localStorage.setItem(BACKUP_KEY,JSON.stringify(list));}
+  catch(e){try{localStorage.setItem(BACKUP_KEY,JSON.stringify(list.slice(0,2)));}catch(e2){console.warn('backups',e2);}}
+}
+function pushBackup(label){
+  try{
+    const who=(S.currentUser&&personById(S.currentUser))?personById(S.currentUser).name:'An\u00f2nim';
+    const st=JSON.parse(JSON.stringify(S));
+    const list=getBackups();
+    list.unshift({ts:Date.now(),by:who,label:String(label||'Canvi'),state:st});
+    setBackups(list.slice(0,5));
+    renderBackups();
+  }catch(e){console.warn('pushBackup',e);}
+}
+let _lastAutoBackup=0;
+function autoBackupIfDue(){
+  const now=Date.now();
+  if(now-_lastAutoBackup<180000)return;
+  _lastAutoBackup=now;
+  pushBackup('Punt autom\u00e0tic');
+}
+function restoreBackup(i){
+  const b=getBackups()[i];if(!b)return;
+  if(!confirm('Tornar a l\u2019estat del '+fmtDataHora(b.ts)+' (\u00ab'+b.label+'\u00bb)?\nEls canvis fets despr\u00e9s d\u2019aquell moment es perdran.'))return;
+  try{
+    const st=JSON.parse(JSON.stringify(b.state));
+    st._del={};st._lm={};
+    Object.keys(S).forEach(k=>{delete S[k];});
+    Object.keys(st).forEach(k=>{S[k]=st[k];});
+    save();
+    if(typeof boot==='function')boot(true);
+    toast('Estat restaurat \u2713');
+    renderBackups();
+  }catch(e){console.error(e);alert('No s\u2019ha pogut restaurar: '+e.message);}
+}
+function renderBackups(){
+  const el=document.getElementById('backupList');if(!el)return;
+  const list=getBackups();
+  if(!list.length){el.innerHTML='<p class="muted tiny">Encara no hi ha c\u00f2pies de seguretat.</p>';return;}
+  el.innerHTML=list.map((b,i)=>
+    '<div class="backup-row"><div class="info"><b>'+esc(b.label)+'</b><br>'
+    +fmtDataHora(b.ts)+' \u00b7 per '+esc(b.by)+'</div>'
+    +'<button class="btn btn-sm" data-restore="'+i+'">\ud83d\udd04 Recupera</button></div>').join('');
+}
+
+/* ============ PALETA DELS \u00c0PATS LLIURES ============
+   Per diferenciar visualment tipus de plats (primers, segons, postres\u2026)
+   en lloc que totes les pastilles surtin blanques. */
+const MEAL_COLORS=[
+  ['','Blanc (per defecte)'],
+  ['#F5E381','Groc'],
+  ['#AAC9B6','Verd clar'],
+  ['#5E8772','Salvia (fosc)'],
+  ['#C77D46','Taronja (fosc)'],
+  ['#7FA8C9','Blau'],
+  ['#B18FC9','Lila'],
+  ['#E39BB0','Rosa']
+];
+function isDarkColor(hex){
+  const h=String(hex||'').replace('#','');
+  if(h.length<6)return false;
+  const r=parseInt(h.slice(0,2),16),g=parseInt(h.slice(2,4),16),b=parseInt(h.slice(4,6),16);
+  if(isNaN(r)||isNaN(g)||isNaN(b))return false;
+  return (0.299*r+0.587*g+0.114*b)<150;
+}
+function makeFreeMeal(note,color,diners){
+  const m={recipeId:null,note:note,diners:diners};
+  if(color)m.color=color;
+  if(S.currentUser&&personById(S.currentUser))m.by=S.currentUser;
+  return m;
+}
+
+
 
 /* ============ ETIQUETES MÚLTIPLES DERIVADES DELS INGREDIENTS ============ */
 const TAG_RULES=[
@@ -785,7 +905,11 @@ function renderWeekBar(){
 
 function renderMenu(){
   const tbl=$('#menuTable'),t=todayIso();
-  let html='<tr><th style="width:74px"></th>'+DAYS.map((d,i)=>{
+  /* amplades de columna explícites: amb <col> el navegador NO pot derivar
+     amplades del contingut, així que la taula sempre càpigua dins el que el
+     contenidor pot desplaçar (sense marge blanc a la dreta) */
+  let html='<colgroup><col style="width:74px">'+Array(7).fill('<col>').join('')+'</colgroup>'
+    +'<tr><th style="width:74px"></th>'+DAYS.map((d,i)=>{
     const dt=new Date(weekStart.getTime()+i*86400000);
     const today=iso(dt)===t;
     return '<th class="'+(today?'today-col':'')+'">'+DAY_LONG[d]
@@ -802,13 +926,18 @@ function renderMenu(){
         const r=mealRecipe(m);
         const name=r?r.name:(m.note||'(àpat lliure)');
         const emo=window.dishEmoji?dishEmoji(r):'🍽️';
+        /* color de pastilla: àpats lliures poden diferenciar-se visualment
+           (primer plat, segon, postres…) en lloc de tots blancs */
+        const cc=m.color||'';
+        const chipCls='meal-chip'+(cc?' colorized':'')+(cc&&isDarkColor(cc)?' dark':'');
+        const chipStyle=cc?' style="background:'+esc(cc)+'"':'';
         /* extracte: 2 primers ingredients; el nom és un enllaç a la fitxa */
         let excerpt='';
         if(r&&r.ingredients&&r.ingredients.length){
           excerpt=r.ingredients.slice(0,2).map(i=>i.name).join(' · ')
             +(r.ingredients.length>2?' · …':'');
         }
-        chips+='<div class="meal-chip" draggable="true" data-key="'+key+'" data-idx="'+idx+'" data-id="open-meal">'
+        chips+='<div class="'+chipCls+'"'+chipStyle+' draggable="true" data-key="'+key+'" data-idx="'+idx+'" data-id="open-meal">'
           +'<span class="t">'+emo+' '+((r&&!r._ghost)?'<a class="meal-link" data-recipe="'+r.id+'" title="Obre la fitxa de la recepta">'+esc(name)+'</a>':esc(name))+'</span>'
           +(excerpt?'<span class="x2 tiny muted">'+esc(excerpt)+'</span>':'')
           +'<span class="s">👥 '+m.diners+(r?'':' · 📝')+'</span>'
@@ -995,36 +1124,84 @@ const TAGS={__fish:'🐟 Peix i marisc',__meat:'🍖 Carn',__poultry:'🍗 Aus i
   });
 }
 
-/* àpat lliure (sense recepta): crear o editar */
+/* àpat lliure (sense recepta): crear o editar.
+   VARIANTS: diversos camps d'un cop (primer plat, segon plat, postres…) i
+   color de pastilla per diferenciar-los visualment al menú. */
+function freeFieldRow(i,note,color){
+  const cur=color||'';
+  return '<div class="free-field" data-fi="'+i+'">'
+    +(i>0?'<button type="button" class="rm" title="Treu aquest camp">✕</button>':'')
+    +'<label>'+(i===0?'Què es menjarà? (ex. Sopar fora, Amanida gran…)':'Camp '+(i+1)+' (ex. postres…)')+'</label>'
+    +'<input class="fnote" maxlength="60" value="'+esc(note||'')+'" placeholder="'+(i===0?'Primer plat…':'Segon plat…')+'">'
+    +'<div class="sw-row"><span class="muted tiny">Color de la pastilla:</span>'
+    +MEAL_COLORS.map(c=>'<button type="button" class="sw'+(c[0]===''?' none':'')+(cur===c[0]?' on':'')
+        +'" data-color="'+c[0]+'" title="'+c[1]+'"'+(c[0]?' style="background:'+c[0]+'"':'')+'></button>').join('')
+    +'</div></div>';
+}
 function openFreeMeal(key,idx){
   const editing=idx!=null?(S.menu[key]||[])[idx]:null;
+  const first=editing?editing.note||'':'';
+  const firstColor=editing?(editing.color||''):'';
   openModal('<h2>'+(editing?'Edita àpat lliure':'Àpat lliure')+'</h2>'
-    +'<label>Què es menjarà? (ex. Sopar fora, Restes d\'arròs, Amanida gran…)</label>'
-    +'<input id="freeNote" maxlength="60" value="'+esc(editing?editing.note||'':'')+'" placeholder="Sopar fora…">'
-    +'<div class="row" style="margin-top:8px"><div style="width:120px"><label>Comensals</label>'
+    +'<div id="freeFields">'+freeFieldRow(0,first,firstColor)+'</div>'
+    +'<button type="button" class="btn btn-sm" id="freeAdd">＋ Afegir camp</button>'
+    +'<div class="row" style="margin-top:10px"><div style="width:120px"><label>Comensals</label>'
     +'<input type="number" min="1" max="12" id="freeDiners" value="'+(editing?editing.diners:S.diners)+'"></div></div>'
     +'<div class="modal-foot"><span class="muted tiny">No genera ingredients a la llista de compra</span>'
     +'<div style="display:flex;gap:8px">'
     +(editing?'<button class="btn btn-danger btn-sm" id="freeDel">Elimina</button>':'')
     +'<button class="btn btn-primary" id="freeOk">D\'acord</button></div></div>');
-  $('#freeNote').focus();
+  const fields=$('#freeFields');
+  const reindex=()=>{[...fields.querySelectorAll('.free-field')].forEach((f,i)=>f.dataset.fi=i);};
+  /* seleccionar color (només dins el seu propi camp: sinó, triar color al
+     camp 2 li treu el color al camp 1) */
+  fields.addEventListener('click',e=>{
+    const sw=e.target.closest('.sw');if(!sw)return;
+    const field=sw.closest('.free-field');
+    if(!field)return;
+    field.querySelectorAll('.sw.on').forEach(x=>x.classList.remove('on'));
+    sw.classList.add('on');
+  });
+  /* treure un camp (no el primer) */
+  fields.addEventListener('click',e=>{
+    const rm=e.target.closest('.rm');if(!rm)return;
+    rm.closest('.free-field').remove();reindex();
+  });
+  $('#freeAdd').onclick=()=>{
+    const i=fields.querySelectorAll('.free-field').length;
+    fields.insertAdjacentHTML('beforeend',freeFieldRow(i,'',''));
+    const inputs=fields.querySelectorAll('.fnote');
+    inputs[inputs.length-1].focus();
+  };
   $('#freeOk').onclick=()=>{
-    const note=$('#freeNote').value.trim();
-    if(!note){alert('Escriu què es menjarà (ex. «Sopar fora»).');return;}
+    const vals=[];
+    [...fields.querySelectorAll('.free-field')].forEach(f=>{
+      const note=f.querySelector('.fnote').value.trim();
+      if(!note)return;
+      const on=f.querySelector('.sw.on');
+      vals.push({note:note,color:on?(on.dataset.color||''):''});
+    });
+    if(!vals.length){alert('Escriu què es menjarà (ex. «Sopar fora»).');return;}
     const diners=Math.max(1,parseInt($('#freeDiners').value,10)||S.diners);
-    if(editing){editing.note=note;editing.diners=diners;save();renderMenu();}
-    else pushMeal(key,{recipeId:null,note:note,diners:diners});
+    if(editing){
+      editing.note=vals[0].note;editing.color=vals[0].color;editing.diners=diners;
+      vals.slice(1).forEach(v=>{(S.menu[key]=S.menu[key]||[]).push(makeFreeMeal(v.note,v.color,diners));});
+      save();renderMenu();markStale();
+    }else{
+      vals.forEach(v=>{(S.menu[key]=S.menu[key]||[]).push(makeFreeMeal(v.note,v.color,diners));});
+      save();renderMenu();markStale();
+    }
     closeModal();
   };
-  $('#freeNote').addEventListener('keydown',e=>{if(e.key==='Enter')$('#freeOk').click();});
+  fields.querySelector('.fnote').addEventListener('keydown',e=>{if(e.key==='Enter')$('#freeOk').click();});
   const del=$('#freeDel');
-  if(del)del.onclick=()=>{removeMeal(key,idx);closeModal();};
+  if(del)del.onclick=()=>{pushBackup('Eliminar àpat «'+(editing.note||'')+'»');removeMeal(key,idx);closeModal();};
 }
 
 /* editar àpat existent (recepta o lliure) */
 function openMealEditor(key,idx){
   const m=(S.menu[key]||[])[idx];if(!m)return;
-  if(!m.recipeId&&!m.note){openFreeMeal(key,idx);return;}
+  if(!m.recipeId){openFreeMeal(key,idx);return;}
   const r=mealRecipe(m);
   openModal('<h2>'+(r?esc(r.name):'Àpat')+'</h2>'
     +'<label>Comensals d\'aquest àpat</label>'
@@ -1107,6 +1284,7 @@ $('#clearMenuBtn').onclick=()=>{
   const n=days.reduce((a,d)=>a+['dinars','sopars'].reduce((b,sl)=>b+((S.menu[d+'|'+sl]||[]).length),0),0);
   if(!n){toast('Aquesta setmana ja està buida.');return;}
   if(!confirm('Esborrar els '+n+' àpats de la setmana del '+fmtDate(mon)+'?'))return;
+  pushBackup('Buidar la setmana del '+fmtDate(mon));
   days.forEach(d=>{delete S.menu[d+'|dinars'];delete S.menu[d+'|sopars'];});
   save();renderMenu();markStale();
   toast('Setmana esborrada ('+n+' àpats)');
@@ -1255,6 +1433,7 @@ function openRecipeModal(id,onSaved){
   const rDel=$('#rDel');
   if(rDel)rDel.onclick=()=>{
     if(!confirm('Eliminar la recepta «'+r.name+'»? També desapareixerà del menú.'))return;
+    pushBackup('Eliminar la recepta «'+r.name+'»');
     S.recipes=S.recipes.filter(x=>x.id!==r.id);
     Object.keys(S.menu).forEach(k=>{S.menu[k]=(S.menu[k]||[]).filter(m=>m.recipeId!==r.id);if(!S.menu[k].length)delete S.menu[k];});
     save();renderRecipes();renderMenu();markStale();closeModal();
@@ -1573,6 +1752,7 @@ $('#listCreatedBy').onchange=e=>{const l=curList();if(l){l.createdBy=e.target.va
 $('#delListBtn').onclick=()=>{
   const l=curList();if(!l)return;
   if(!confirm('Eliminar la llista «'+l.name+'»?'))return;
+  pushBackup('Eliminar la llista «'+l.name+'»');
   S.shoppingLists=S.shoppingLists.filter(x=>x.id!==l.id);
   curListId=null;save();renderLists();updateShopBadge();
 };

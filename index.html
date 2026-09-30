@@ -253,6 +253,17 @@
           </div>
           <p class="muted" style="margin-top:10px" id="storageInfo"></p>
         </details>
+
+      <!-- Sempre visible, a baix de tot: comprovar si la sincronització ha
+           funcionat (i qui l'ha feta) + recuperar un canvi equivocat -->
+      <hr class="sep">
+      <h3 style="margin-bottom:6px">🕒 Última actualització</h3>
+      <p class="muted" id="syncInfo" style="margin-top:0">—</p>
+
+      <hr class="sep">
+      <h3 style="margin-bottom:6px">🗂 Còpies de seguretat — 5 últims canvis</h3>
+      <p class="muted tiny" style="margin-top:0">Si algú ha esborrat una llista de la compra o ha fet un canvi equivocat, el pots recuperar aquí. Es guarda l'estat ABANS de cada acció destructiva i un punt automàtic cada pocs minuts.</p>
+      <div id="backupList" class="backup-list"></div>
     </div>
   </div>
 </section>
@@ -267,7 +278,7 @@
 <div id="toastSlot"></div>
 
 <script>
-const APP_VERSION='72';
+const APP_VERSION='73';
 /* Service worker: comprova actualitzacions activament (carrega + cada 5 min + al tornar a l'app) */
 if("serviceWorker" in navigator){
   const swReg=navigator.serviceWorker.register("sw.js").then(reg=>{
