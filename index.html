@@ -206,6 +206,11 @@
             <div style="align-self:end"><button class="btn btn-primary" id="gistSaveBtn">Desa</button></div>
           </div>
           <p class="muted" id="gistStatus"></p>
+          <div class="row" style="margin-top:6px;align-items:center">
+            <button class="btn btn-sm" id="gistProbeBtn">🔎 Prova la connexió</button>
+            <span class="muted tiny">Comprova si la gist existeix i si el teu token hi accedeix</span>
+          </div>
+          <p class="muted tiny" id="gistProbeOut" style="margin:6px 0 0"></p>
         </details>
 
       <!-- Accordion 3: Qui sou? -->
@@ -278,7 +283,7 @@
 <div id="toastSlot"></div>
 
 <script>
-const APP_VERSION='73';
+const APP_VERSION='74';
 /* Service worker: comprova actualitzacions activament (carrega + cada 5 min + al tornar a l'app) */
 if("serviceWorker" in navigator){
   const swReg=navigator.serviceWorker.register("sw.js").then(reg=>{

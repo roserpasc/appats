@@ -827,6 +827,49 @@ $('#gistSaveBtn').onclick=()=>{
   toast('Credencials desades — sincronitzant…');
   location.reload(); /* re-inicialitza el mòdul de sync amb les noves credencials */
 };
+/* Diagnòstic de la connexió, en 2 passos:
+   1) GET /user amb el token → prova si el token és vàlid (el GET de la gist
+      NO serveix: la gist privada es llegeix per URL secreta i GitHub hi
+      respon 200 fins i tot amb credencials buides).
+   2) Si el token és vàlid, GET de la gist amb token → 200 = hi accedeix,
+      404 = la gist pertany a un altre compte (GitHub no en revela l'existència). */
+$('#gistProbeBtn').onclick=async function(){
+  const out=$('#gistProbeOut');if(!out)return;
+  const cfg=(typeof getGistCfg==='function')?getGistCfg():null;
+  if(!cfg||!cfg.gistId){out.textContent='✗ Primer desa una ID de gist i un token.';out.style.color='#C77D46';return;}
+  const id=cfg.gistId, tok=cfg.token;
+  const UA='midweek/'+((typeof APP_VERSION!=='undefined')?APP_VERSION:'app');
+  const H={'Accept':'application/vnd.github+json','User-Agent':UA};
+  out.textContent='… provant el token';out.style.color='';
+  /* 1) el token serveix per a alguna cosa? */
+  let who={s:0,login:'-',msg:''};
+  try{
+    const r=await fetch('https://api.github.com/user',{headers:Object.assign({Authorization:'Bearer '+tok},H)});
+    who.s=r.status;const j=await r.json().catch(()=>({}));who.login=j.login||'-';who.msg=j.message||'';
+  }catch(e){who.s='ERR '+e.message;}
+  if(who.s!==200){
+    out.textContent='✗ TOKEN INVÀLID (HTTP '+who.s+(who.msg?' — '+who.msg:'')+'): el compte que l\'ha creat no hi accedeix. Genera’n un de nou a GitHub → Settings → Developer settings → Personal access tokens (àmbit gist) amb el compte que té la gist, i enganxa’l aquí.';
+    out.style.color='#C77D46';return;
+  }
+  out.textContent='… token de @'+who.login+' correcte; provant la gist';
+  /* 2) aquest token pot accedir a la gist? */
+  let g={s:0,owner:'?'};
+  try{
+    const r=await fetch('https://api.github.com/gists/'+id,{headers:Object.assign({Authorization:'Bearer '+tok},H)});
+    g.s=r.status;
+    if(r.ok){const j=await r.json().catch(()=>({}));g.owner=((j.owner&&j.owner.login)||'?')+(j.public?' (gist pública)':' (gist PRIVADA)');}
+  }catch(e){g.s='ERR '+e.message;}
+  if(g.s===200){
+    out.textContent='✓ Tot correcte — token de @'+who.login+', gist '+g.owner+', ID '+id.slice(0,8)+'…. Pots sincronitzar.';
+    out.style.color='#5E8772';
+  }else if(g.s===404){
+    out.textContent='✗ El teu token (@'+who.login+') NO pot accedir a aquesta gist (ID '+id.slice(0,8)+'…): existeix però pertany a un altre compte de GitHub → 404 i no hi pot escriure. Solució: un token fet amb el compte de la gist, o una gist nova feta amb el teu compte.';
+    out.style.color='#C77D46';
+  }else{
+    out.textContent='? Token correcte (@'+who.login+') però la gist respon HTTP '+g.s+'.';
+    out.style.color='#C77D46';
+  }
+};
 function renderCatChips(){
   $('#catChips').innerHTML=S.categories.map((c,i)=>
     '<span class="chip">'+esc(c)+'<button data-catdel="'+i+'">✕</button></span>').join('');

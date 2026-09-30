@@ -132,8 +132,16 @@ function getGistCfg(){
   if(typeof GIST_SYNC!=='undefined'&&GIST_SYNC&&GIST_SYNC.gistId&&GIST_SYNC.token)return GIST_SYNC;
   return null;
 }
-const GIST_CFG=getGistCfg();
-const GIST_OK=!!(GIST_CFG&&GIST_CFG.gistId&&GIST_CFG.token&&typeof fetch==='function');
+var GIST_CFG=getGistCfg();
+var GIST_OK=!!(GIST_CFG&&GIST_CFG.gistId&&GIST_CFG.token&&typeof fetch==='function');
+/* La config es RE-LEGEIX abans de cada cicle de sync: abans quedava congelada
+   en carregar la pàgina, de manera que si l'usuari enganxava les credencials a
+   Opcions i no recarregava, l'app continuava veient GIST_OK=false i no sincronitzava. */
+function refreshGistCfg(){
+  GIST_CFG=getGistCfg();
+  GIST_OK=!!(GIST_CFG&&GIST_CFG.gistId&&GIST_CFG.token&&typeof fetch==='function');
+  return GIST_OK;
+}
 
 /* còpia lleugera per al gist (límit 1MB/fitxer):
    - les receptes de BIBLIOTECA (Corpus/Arguiñano/Gastroteca) NO viatgen:
@@ -210,7 +218,7 @@ function _markAuthBroken(){
   }catch(e){}
 }
 function pullFromGist() {
-  if(!GIST_OK)return Promise.resolve(null);
+  if(!refreshGistCfg())return Promise.resolve(null);
   const url=`https://api.github.com/gists/${GIST_CFG.gistId}`;
   /* User-Agent: GitHub la REBUTJA (403 "Request forbidden by administrative
      rules") sense aquest header. Els navegadors l'eliminen sols i envien el
@@ -220,17 +228,23 @@ function pullFromGist() {
   const anonHeaders={Accept:'application/vnd.github+json','User-Agent':UA};
   return _fetchTO(url,{headers:authHeaders})
     .then(r=>{
-      if(r.status===401||r.status===403){
-        /* credencial rebutjada / sense permís: prova SENSE token (el gist es
-           pot llegir per URL secreta). Si el retry funciona, llegim igualment
-           i deixem AUTH_BROKEN marcat: es pot LLEGIR però no ESCRIURE. */
+      if(r.status===401||r.status===403||r.status===404){
+        /* 401/403: credencial rebutjada. 404: la gist PRIVADA no és visible
+           per a aquest token (el token és d'un compte diferent del que la va
+           crear) — GitHub no revela l'existència i respon 404. En tots els
+           casos es prova SENSE token: la gist es llegeix per URL secreta.
+           Si el retry funciona, llegim igualment i deixem AUTH_BROKEN marcat:
+           es pot LLEGIR però no ESCRIURE. */
         _markAuthBroken();
         return _fetchTO(url,{headers:anonHeaders}).then(r2=>(r2&&r2.ok)?r2:r);
       }
       return r;
     })
     .then(r=>{
-      if(!r.ok)throw new Error(`GitHub error ${r.status}`);
+      if(!r.ok){
+        const extra=(r.status===404)?' — aquesta ID no existeix, o la gist és privada i el teu token no hi pertany (gist creada amb un altre compte)':'';
+        throw new Error(`GitHub error ${r.status}${extra}`);
+      }
       return r.json();
     })
     .then(gist=>{
@@ -248,7 +262,7 @@ function pullFromGist() {
 }
 
 function pushToGist(state) {
-  if(!GIST_OK)return Promise.resolve(null);
+  if(!refreshGistCfg())return Promise.resolve(null);
   const data=JSON.stringify(syncPayload(state));
   return _fetchTO(`https://api.github.com/gists/${GIST_CFG.gistId}`, {
     method:'PATCH',
@@ -264,6 +278,10 @@ function pushToGist(state) {
     if(r.status===401||r.status===403){
       _markAuthBroken();
       throw new Error('GitHub '+r.status+' — token invàlid o sense permisos de gist');
+    }
+    if(r.status===404){
+      _markAuthBroken();
+      throw new Error('GitHub 404 — el teu token NO POT EDITAR aquesta gist: la gist és privada i pertany a un compte diferent del del token. Cal un token del compte de la gist, o una gist nova feta amb el teu compte.');
     }
     if(!r.ok)throw new Error(`GitHub error ${r.status}`);
     try{noteSync(true,'push');}catch(e){}
@@ -547,7 +565,7 @@ function adoptRemote(remote){
 let syncIntervalId = null;
 let _syncRunning=false, _syncQueued=false, _syncTimer=null;
 function runSync(){
-  if(!GIST_OK)return Promise.resolve(false);
+  if(!refreshGistCfg())return Promise.resolve(false);
   if(_syncRunning){_syncQueued=true;return Promise.resolve(false);}
   _syncRunning=true;
   return pullFromGist().then(remote=>{
@@ -574,7 +592,7 @@ function runSync(){
   });
 }
 function scheduleSync(delay){
-  if(!GIST_OK)return;
+  if(!refreshGistCfg())return;
   clearTimeout(_syncTimer);
   _syncTimer=setTimeout(()=>{runSync().then(changed=>{if(changed)try{boot(false);}catch(e){}});},
                        delay==null?600:delay);
