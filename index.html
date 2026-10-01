@@ -266,9 +266,9 @@
       <p class="muted" id="syncInfo" style="margin-top:0">—</p>
 
       <hr class="sep">
-      <h3 style="margin-bottom:6px">🗂 Còpies de seguretat — 5 últims canvis</h3>
-      <p class="muted tiny" style="margin-top:0">Si algú ha esborrat una llista de la compra o ha fet un canvi equivocat, el pots recuperar aquí. Es guarda l'estat ABANS de cada acció destructiva i un punt automàtic cada pocs minuts.</p>
-      <div id="backupList" class="backup-list"></div>
+      <h3 style="margin-bottom:6px">🗑 Llistes eliminades — paperera (10 dies)</h3>
+      <p class="muted tiny" style="margin-top:0">Esborrar una llista no la destrueix: queda aquí durant 10 dies. Pots veure-la i tornar-la a posar com si fos actual, per no perdre llistes llargues per error. Passats 10 dies s'esborra sola.</p>
+      <div id="trashList" class="backup-list"></div>
     </div>
   </div>
 </section>
@@ -283,7 +283,7 @@
 <div id="toastSlot"></div>
 
 <script>
-const APP_VERSION='75';
+const APP_VERSION='76';
 /* Service worker: comprova actualitzacions activament (carrega + cada 5 min + al tornar a l'app) */
 if("serviceWorker" in navigator){
   const swReg=navigator.serviceWorker.register("sw.js").then(reg=>{

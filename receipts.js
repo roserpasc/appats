@@ -666,27 +666,11 @@ $('#apiKeyInput').oninput=debounce(e=>{
 },400);
 $('#modelSelect').value=S.settings.model||'google/gemini-2.5-flash';
 $('#modelSelect').onchange=e=>{S.settings.model=e.target.value;save();toast('Model: '+e.target.value);};
-/* botons de recuperació de còpies de seguretat (delegació) */
-(function(){
-  const box=document.getElementById('backupList');if(!box)return;
-  box.addEventListener('click',e=>{
-    const b=e.target.closest('[data-restore]');if(!b)return;
-    restoreBackup(+b.dataset.restore);
-  });
-})();
+/* botons de la paperera de llistes: delegació a app.js (#trashList) */
 
 /* ============================================================
    IDENTITAT: login/anònim/crear — sense PIN, memòria per dispositiu
    ============================================================ */
-/* botons de recuperació de còpies de seguretat (delegació) */
-(function(){
-  const box=document.getElementById('backupList');if(!box)return;
-  box.addEventListener('click',e=>{
-    const b=e.target.closest('[data-restore]');if(!b)return;
-    restoreBackup(+b.dataset.restore);
-  });
-})();
-
 const IDENTITY_KEY='midweek_identity';
 function getMyIdentity(){
   try{const v=JSON.parse(localStorage.getItem(IDENTITY_KEY));if(v&&v.id)return v;}catch(e){}
@@ -998,7 +982,8 @@ function boot(doSeed){
   renderCatChips();
   try{renderGistCfg();}catch(e){}
   try{renderSyncInfo();}catch(e){}
-  try{renderBackups();}catch(e){}
+  try{sweepTrash();}catch(e){}   /* neteja paperera > 10 dies */
+  try{renderTrash();}catch(e){}
     /* identitat: auto-login si el dispositiu ja la coneix; modal SOLO al
        boot inicial — en els re-renders del sync (boot(false)) NO es pot
        obrir ni re- cridar setIdentity (disparava save()+push innecessaris) */

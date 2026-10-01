@@ -343,6 +343,7 @@ function _curCols(){
     people:S.people||[],
     receipts:_stripPhoto(S.receipts),
     shoppingLists:S.shoppingLists||[],
+    deletedLists:S.deletedLists||[],
     items:((S.shopping&&S.shopping.items)||[]),
     categories:S.categories||[],
     settlements:S.settlements||[],
@@ -386,6 +387,7 @@ function stampLocalChanges(){
   cmp('person',prev.people,c.people,p=>p.id);
   cmp('receipt',prev.receipts,c.receipts,r=>r.id);
   cmp('list',prev.shoppingLists,c.shoppingLists,l=>l.id);
+  cmp('trash',prev.deletedLists,c.deletedLists,l=>l.id);
   cmp('item',prev.items,c.items,i=>i.id);
   cmp('cat',prev.categories,c.categories,x=>x);
   cmp('settlement',prev.settlements,c.settlements,s=>JSON.stringify(s));
@@ -519,6 +521,23 @@ function mergeStates(local, remote) {
       outL.push(base);
     });
     out.shoppingLists=outL;
+    /* PAPERERA (llistes eliminades): unió per id amb _lm/_del — esborrar-la
+       a un dispositiu la porta a la paperera de l'altre, i restaurar-la la
+       treu d'allà. Els 10 dies es netegen a cada dispositiu amb sweepTrash. */
+    {
+      const cleanT=a=>Array.isArray(a)?a.filter(x=>x&&typeof x==='object'&&x.id):[];
+      const ltm=new Map(cleanT(local.deletedLists).map(l=>[l.id,l]));
+      const rtm=new Map(cleanT(remote.deletedLists).map(l=>[l.id,l]));
+      const outT=[];
+      new Set([...ltm.keys(),...rtm.keys()]).forEach(id=>{
+        const v=pick('trash',id,ltm.has(id),rtm.has(id),ltm.get(id),rtm.get(id));
+        if(v===undefined)return;
+        const L=ltm.get(id),R=rtm.get(id);
+        /* els dos la tenen a la paperera: guanya la més recent */
+        if(L&&R&&((R.deletedAt||0)>(L.deletedAt||0)))outT.push(R);else outT.push(v);
+      });
+      out.deletedLists=outT;
+    }
   }
   /* llista de la compra: unió per id; done si qualsevol dispositiu la marca */
   const iMap={};
@@ -740,52 +759,106 @@ function renderSyncInfo(){
    Guarda l'estat ABANS d'una acci\u00f3 destructiva (esborrar llista, recepta,
    tiquet\u2026) i un punt autom\u00e0tic cada 3 minuts. Restaurar neteja _del/_lm:
    si no, les tombstones de l'esborrat tornarien a matar el que recuperem. */
-const BACKUP_KEY='midweek_backups';
-function getBackups(){try{const l=JSON.parse(localStorage.getItem(BACKUP_KEY)||'[]');return Array.isArray(l)?l:[];}catch(e){return [];}}
-function setBackups(list){
-  try{localStorage.setItem(BACKUP_KEY,JSON.stringify(list));}
-  catch(e){try{localStorage.setItem(BACKUP_KEY,JSON.stringify(list.slice(0,2)));}catch(e2){console.warn('backups',e2);}}
-}
-function pushBackup(label){
-  try{
-    const who=(S.currentUser&&personById(S.currentUser))?personById(S.currentUser).name:'An\u00f2nim';
-    const st=JSON.parse(JSON.stringify(S));
-    const list=getBackups();
-    list.unshift({ts:Date.now(),by:who,label:String(label||'Canvi'),state:st});
-    setBackups(list.slice(0,5));
-    renderBackups();
-  }catch(e){console.warn('pushBackup',e);}
-}
+const BACKUP_KEY_UNUSED=null;
+function pushBackup(label){/* ELIMINAT: les còpies de seguretat s'han retirat   (es demanava eliminar-les). En el seu lloc, la paperera de llistes. */}
 let _lastAutoBackup=0;
-function autoBackupIfDue(){
-  const now=Date.now();
-  if(now-_lastAutoBackup<180000)return;
-  _lastAutoBackup=now;
-  pushBackup('Punt autom\u00e0tic');
+function autoBackupIfDue(){/* ELIMINAT (ja no hi ha còpies de seguretat) */}
+function restoreBackup(i){toast('Ja no hi ha còpies de seguretat: ara les llistes esborrades van a la paperera.');}
+function renderBackups(){try{renderTrash();}catch(e){}}
+
+/* ============ PAPERERA DE LLISTES (soft delete, 10 dies) ============
+   Esborrar una llista NO la destrueix: es mou a S.deletedLists amb
+   l'hora d'esborrat. La paperera és part de S, per tant VIATJA AL GIST
+   (si esborres a un dispositiu, a l'altre desapareix també, i pots
+   restaurar-la des de qualsevol). Passats TRASH_DAYS s'esborra sola. */
+const TRASH_DAYS=10;
+const TRASH_MS=TRASH_DAYS*24*60*60*1000;
+function trashLists(){
+  if(!Array.isArray(S.deletedLists)) S.deletedLists=[];
+  return S.deletedLists;
 }
-function restoreBackup(i){
-  const b=getBackups()[i];if(!b)return;
-  if(!confirm('Tornar a l\u2019estat del '+fmtDataHora(b.ts)+' (\u00ab'+b.label+'\u00bb)?\nEls canvis fets despr\u00e9s d\u2019aquell moment es perdran.'))return;
+function sweepTrash(){
+  /* esborra permanentment les llistes que han passat de 10 dies */
   try{
-    const st=JSON.parse(JSON.stringify(b.state));
-    st._del={};st._lm={};
-    Object.keys(S).forEach(k=>{delete S[k];});
-    Object.keys(st).forEach(k=>{S[k]=st[k];});
-    save();
-    if(typeof boot==='function')boot(true);
-    toast('Estat restaurat \u2713');
-    renderBackups();
-  }catch(e){console.error(e);alert('No s\u2019ha pogut restaurar: '+e.message);}
+    const t=trashLists(), now=Date.now();
+    const keep=t.filter(l=>l&&now-((l.deletedAt||0))<TRASH_MS);
+    if(keep.length!==t.length){S.deletedLists=keep;save();}
+  }catch(e){console.warn('sweepTrash',e);}
 }
-function renderBackups(){
-  const el=document.getElementById('backupList');if(!el)return;
-  const list=getBackups();
-  if(!list.length){el.innerHTML='<p class="muted tiny">Encara no hi ha c\u00f2pies de seguretat.</p>';return;}
-  el.innerHTML=list.map((b,i)=>
-    '<div class="backup-row"><div class="info"><b>'+esc(b.label)+'</b><br>'
-    +fmtDataHora(b.ts)+' \u00b7 per '+esc(b.by)+'</div>'
-    +'<button class="btn btn-sm" data-restore="'+i+'">\ud83d\udd04 Recupera</button></div>').join('');
+function deleteList(l){
+  if(!l)return;
+  const t=trashLists();
+  if(!t.some(x=>x.id===l.id)){
+    const copy=JSON.parse(JSON.stringify(l));
+    copy.deletedAt=Date.now();
+    t.unshift(copy);
+    S.deletedLists=t.slice(0,60); /* sostre de seguretat */
+  }
+  S.shoppingLists=(S.shoppingLists||[]).filter(x=>x.id!==l.id);
 }
+function restoreList(id){
+  const t=trashLists();
+  const i=t.findIndex(x=>x.id===id);
+  if(i<0)return null;
+  const l=Object.assign({},t[i]);
+  delete l.deletedAt;
+  t.splice(i,1);
+  S.deletedLists=t;
+  if(!(S.shoppingLists||[]).some(x=>x.id===l.id))S.shoppingLists.push(l);
+  curListId=l.id;
+  save();renderLists();updateShopBadge();renderTrash();
+  return l;
+}
+function viewTrashedList(id){
+  const l=trashLists().find(x=>x.id===id);
+  if(!l)return;
+  const left=Math.max(0,TRASH_DAYS-Math.floor((Date.now()-(l.deletedAt||0))/86400000));
+  const items=(l.items||[]).map(i=>
+    '<li style="list-style:none;padding:3px 0;border-bottom:1px dashed var(--border)">'
+    +(i.qty?'<b>'+esc(String(i.qty))+(i.unit?' '+esc(i.unit):'')+'</b> ':'')
+    +esc(i.name)+(i.done?' <span class="muted tiny">✓</span>':'')+'</li>').join('');
+  openModal('<h3 style="margin-top:0">'+esc(l.name||'Llista')+'</h3>'
+    +'<p class="muted tiny" style="margin-top:-6px">Esborrada el '+fmtDataHora(l.deletedAt||Date.now())
+    +' · s’esborrarà sola en '+left+' dia'+(left===1?'':'s')+'</p>'
+    +(items?('<ul style="margin:8px 0;padding:0">'+items+'</ul>'):'<p class="muted">Llista buida.</p>')
+    +'<div class="row" style="justify-content:flex-end;gap:8px;margin-top:12px">'
+    +'<button class="btn btn-sm" data-close>Tanca</button>'
+    +'<button class="btn btn-sm" data-restore-trash="'+esc(l.id)+'">♻️ Restaurar</button></div>');
+}
+function renderTrash(){
+  const el=document.getElementById('trashList');if(!el)return;
+  const t=trashLists();
+  if(!t.length){
+    el.innerHTML='<p class="muted tiny">No hi ha cap llista esborrada.</p>';
+    return;
+  }
+  el.innerHTML=t.map(l=>{
+    const left=Math.max(0,TRASH_DAYS-Math.floor((Date.now()-(l.deletedAt||0))/86400000));
+    return '<div class="backup-row"><div class="info"><b>'+esc(l.name||'Llista')+'</b><br>'
+      +fmtDataHora(l.deletedAt||Date.now())+' · '+((l.items||[]).length)+' productes'
+      +' · queda(n) '+left+' dia'+(left===1?'':'s')+'</div>'
+      +'<span class="row" style="gap:6px">'
+      +'<button class="btn btn-sm" data-view-trash="'+esc(l.id)+'">👁 Veure</button>'
+      +'<button class="btn btn-sm" data-restore-trash="'+esc(l.id)+'">♻️ Restaurar</button></span></div>';
+  }).join('');
+}
+/* delegació: veure / restaurar (paperera i modal) */
+(function(){
+  const fire=(e)=>{
+    const v=e.target.closest('[data-view-trash]');
+    if(v){viewTrashedList(v.dataset.viewTrash);return;}
+    const r=e.target.closest('[data-restore-trash]');
+    if(r){
+      const l=restoreList(r.dataset.restoreTrash);
+      if(l){closeModal();toast('Llista «'+l.name+'» restaurada ✓');}
+      else toast('Ja no hi és.');
+    }
+  };
+  const box=document.getElementById('trashList');
+  if(box)box.addEventListener('click',fire);
+  const mb=document.getElementById('modalBg');
+  if(mb)mb.addEventListener('click',fire);
+})();
 
 /* ============ PALETA DELS \u00c0PATS LLIURES ============
    Per diferenciar visualment tipus de plats (primers, segons, postres\u2026)
@@ -1801,10 +1874,10 @@ function renderListsCardsOnly(l){
 $('#listCreatedBy').onchange=e=>{const l=curList();if(l){l.createdBy=e.target.value;save();renderLists();}};
 $('#delListBtn').onclick=()=>{
   const l=curList();if(!l)return;
-  if(!confirm('Eliminar la llista «'+l.name+'»?'))return;
-  pushBackup('Eliminar la llista «'+l.name+'»');
-  S.shoppingLists=S.shoppingLists.filter(x=>x.id!==l.id);
-  curListId=null;save();renderLists();updateShopBadge();
+  if(!confirm('Esborrar la llista «'+l.name+'»?\n\nNo es perddrà: anirà a la paperera (Opcions → Llistes eliminades) durant 10 dies, i des d’allà la pots tornar a posar.'))return;
+  deleteList(l);
+  curListId=null;save();renderLists();updateShopBadge();renderTrash();
+  toast('Llista esborrada · és a la paperera (10 dies)');
 };
 $('#printListBtn').onclick=()=>{
   const l=curList();if(!l||!l.items.length){toast('La llista és buida.');return;}
