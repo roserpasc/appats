@@ -198,12 +198,30 @@ let AUTH_BROKEN=false;
 /* Un fetch que mai resol (mòbil, xarxa inestable, tall de cobertura) deixaria
    _syncing=true per sempre i ATURARIA la sincronització fins al següent
    recàrrega de la pàgina. Timeout obligatori. */
-function _fetchTO(url,opts,ms){
-  if(typeof AbortController==='undefined')return fetch(url,opts);
-  const c=new AbortController();
-  const t=setTimeout(()=>{try{c.abort();}catch(e){}},ms||15000);
-  const o=Object.assign({},opts,{signal:c.signal});
-  return fetch(url,o).finally(()=>clearTimeout(t));
+function _fetchTO(url,opts,ms,tries){
+  /* 3 intents per defecte: GitHub ha tornat 504 en ple push i, sense
+     reintent, el canvi local es quedava PERDUT fins al següent save
+     (l'usuari veia "he fet un canvi i l'altre no el veu"). Els 4xx són
+     definitius (401/403/404/409): no es reintenten. */
+  const n=(tries==null)?3:tries;
+  const attempt=k=>{
+    if(typeof AbortController==='undefined')return fetch(url,opts);
+    const c=new AbortController();
+    const t=setTimeout(()=>{try{c.abort();}catch(e){}},ms||15000);
+    const o=Object.assign({},opts,{signal:c.signal});
+    return fetch(url,o).finally(()=>clearTimeout(t)).then(r=>{
+      const retryable=r&&(r.status===429||r.status===502||r.status===503||r.status===504);
+      if(retryable&&k>0){
+        return new Promise(res=>setTimeout(res,600*(n-k+1))).then(()=>attempt(k-1));
+      }
+      return r;
+    }).catch(e=>{
+      const net=e&&(e.name==='AbortError'||/network|failed|timeout/i.test(e.message||''));
+      if(net&&k>0)return new Promise(res=>setTimeout(res,600*(n-k+1))).then(()=>attempt(k-1));
+      throw e;
+    });
+  };
+  return attempt(n);
 }
 function _markAuthBroken(){
   const was=AUTH_BROKEN;
@@ -342,9 +360,10 @@ function stampLocalChanges(){
   S._lm=S._lm||{};S._del=S._del||{};
   /* array per id/nom */
   const cmp=(coll,prevArr,curArr,keyOf)=>{
-    if(!Array.isArray(prevArr)||!Array.isArray(curArr))return;
-    const pm=new Map(prevArr.map(x=>[keyOf(x),x]));
-    const cm=new Map(curArr.map(x=>[keyOf(x),x]));
+  if(!Array.isArray(prevArr)||!Array.isArray(curArr))return;
+  const cl=a=>a.filter(x=>x&&typeof x==='object'&&keyOf(x)!=null);
+  const pm=new Map(cl(prevArr).map(x=>[keyOf(x),x]));
+  const cm=new Map(cl(curArr).map(x=>[keyOf(x),x]));
     cm.forEach((v,k)=>{
       const p=pm.get(k);
       if(!p||JSON.stringify(p)!==JSON.stringify(v))_lmSet(coll,k);
@@ -406,8 +425,11 @@ function mergeStates(local, remote) {
     return undefined;
   }
   function mergeArr(coll,lArr,rArr,keyOf,adopt){
-    const lm=new Map((lArr||[]).map(x=>[keyOf(x),x]));
-    const rm=new Map((rArr||[]).map(x=>[keyOf(x),x]));
+    /* defensa: element null/undefined/id absent -> trencaria new Map (i amb
+       ell TOTA la sync). Es descarta l'element dolent, no la sincronització. */
+    const clean=a=>Array.isArray(a)?a.filter(x=>x&&typeof x==='object'&&keyOf(x)!=null):[];
+    const lm=new Map(clean(lArr).map(x=>[keyOf(x),x]));
+    const rm=new Map(clean(rArr).map(x=>[keyOf(x),x]));
     const ids=new Set([...lm.keys(),...rm.keys()]);
     const outA=[];
     ids.forEach(id=>{
@@ -432,7 +454,8 @@ function mergeStates(local, remote) {
   }
   function keepList(l,r){
     const base=Object.assign({},(lmNewer('list',l.id,l,r)?r:l));
-    const im=new Map((l.items||[]).map(i=>[i.id,i]));
+    const ci=a=>Array.isArray(a)?a.filter(i=>i&&i.id):[];
+    const im=new Map(ci(l.items).map(i=>[i.id,i]));
     (r.items||[]).forEach(i=>{
       const ex=im.get(i.id);
       im.set(i.id,ex?Object.assign({},ex,i,{done:!!(ex.done||i.done)}):i);
@@ -471,8 +494,12 @@ function mergeStates(local, remote) {
   out.balanceAdjusts=balAdj;
   /* llistes de compra: per id (_lm/_del) + fusió d'items amb done-union */
   {
-    const lm=new Map((local.shoppingLists||[]).map(l=>[l.id,l]));
-    const rm=new Map((remote.shoppingLists||[]).map(l=>[l.id,l]));
+    /* defensa: un element null/undefined/d'id absent (array sparse o danyat)
+       trencaria TOTA la sincronització dins new Map("… is not an entry
+       object"); millor perdre un element corrupte que no sincronitzar res */
+    const clean=a=>Array.isArray(a)?a.filter(x=>x&&typeof x==='object'&&x.id):[];
+    const lm=new Map(clean(local.shoppingLists).map(l=>[l.id,l]));
+    const rm=new Map(clean(remote.shoppingLists).map(l=>[l.id,l]));
     const outL=[];
     new Set([...lm.keys(),...rm.keys()]).forEach(id=>{
       const v=pick('list',id,lm.has(id),rm.has(id),lm.get(id),rm.get(id));
@@ -481,8 +508,9 @@ function mergeStates(local, remote) {
       if(!L||!R){outL.push(v);return;}
       /* els dos la tenen: items en unió amb done-union, camps segons _lm */
       const base=Object.assign({},v);
-      const im=new Map((L.items||[]).map(i=>[i.id,i]));
-      (R.items||[]).forEach(i=>{
+      const ci=a=>Array.isArray(a)?a.filter(i=>i&&i.id):[];
+      const im=new Map(ci(L.items).map(i=>[i.id,i]));
+      ci(R.items).forEach(i=>{
         const ex=im.get(i.id);
         im.set(i.id,ex?Object.assign({},ex,i,{done:!!(ex.done||i.done)}):i);
       });
@@ -564,6 +592,9 @@ function adoptRemote(remote){
 }
 let syncIntervalId = null;
 let _syncRunning=false, _syncQueued=false, _syncTimer=null;
+/* un push que ha fallat (504/xarxa) es re-programa: els canvis locals NO es
+   queden perduts esperant que algú faci un altre save */
+let PUSH_FAILED=false;
 function runSync(){
   if(!refreshGistCfg())return Promise.resolve(false);
   if(_syncRunning){_syncQueued=true;return Promise.resolve(false);}
@@ -583,12 +614,13 @@ function runSync(){
     const localSig=pushSig(S);
     const remoteSig=remote?pushSig(remote):null;
     if(localSig!==remoteSig){
-      return pushToGist(S).then(()=>changed).catch(()=>changed);
+      return pushToGist(S).then(()=>changed).catch(()=>{PUSH_FAILED=true;return changed;});
     }
     return changed;
   }).catch(e=>{console.warn('sync error:',e);return false;}).finally(()=>{
     _syncRunning=false;
     if(_syncQueued){_syncQueued=false;scheduleSync(0);}
+    else if(PUSH_FAILED){PUSH_FAILED=false;scheduleSync(8000);}
   });
 }
 function scheduleSync(delay){
