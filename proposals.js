@@ -1,6 +1,6 @@
 'use strict';
 /* ============================================================
-   Midweek — Generador de propostes de menú
+   Àppats — Generador de propostes de menú
    Modes: tradicional · saludable (dieta mediterrània) · ràpid
    Estratègia: cada mode té un sistema de puntuació sobre les
    receptes disponibles; si no n'hi ha prou, proposa àpats

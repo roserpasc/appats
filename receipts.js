@@ -1,6 +1,6 @@
 'use strict';
 /* ============================================================
-   Midweek — Fitxer 2/2: tiquets amb foto→IA, costos per persona,
+   Àppats — Fitxer 2/2: tiquets amb foto→IA, costos per persona,
    balanç compartit, opcions, seed i arrencada.
    (s'afegeix a app.js via <script src> en ordre)
    ============================================================ */
@@ -822,7 +822,7 @@ $('#gistProbeBtn').onclick=async function(){
   const cfg=(typeof getGistCfg==='function')?getGistCfg():null;
   if(!cfg||!cfg.gistId){out.textContent='✗ Primer desa una ID de gist i un token.';out.style.color='#C77D46';return;}
   const id=cfg.gistId, tok=cfg.token;
-  const UA='midweek/'+((typeof APP_VERSION!=='undefined')?APP_VERSION:'app');
+  const UA='appats/'+((typeof APP_VERSION!=='undefined')?APP_VERSION:'app');
   const H={'Accept':'application/vnd.github+json','User-Agent':UA};
   out.textContent='… provant el token';out.style.color='';
   /* 1) el token serveix per a alguna cosa? */
@@ -1077,13 +1077,13 @@ if(typeof initialSync==='function')initialSync();
 
     const fails=window.__mwResults.filter(r=>!r.ok);
     console.log('SELFTEST DONE — '+(window.__mwResults.length-fails.length)+'/'+window.__mwResults.length+' OK');
-    document.title='TESTS '+(fails.length?'FAIL('+fails.length+')':'OK')+' — Midweek';
+    document.title='TESTS '+(fails.length?'FAIL('+fails.length+')':'OK')+' — Àppats';
     if(fails.length){document.body.setAttribute('data-test-fails',JSON.stringify(fails));console.table(fails);}
     window.__testsDone=true;
   }catch(e){
     console.error('SELFTEST CRASH',e);
     window.__mwResults.push({name:'crash',ok:false,extra:String(e&&e.stack||e)});
-    document.title='TESTS CRASH — Midweek';
+    document.title='TESTS CRASH — Àppats';
     window.__testsDone=true;
   }
 })();

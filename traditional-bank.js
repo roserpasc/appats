@@ -1,6 +1,6 @@
 'use strict';
 /* ============================================================
-   Midweek — Banc de receptes tradicionals del Corpus de la cuina
+   Àppats — Banc de receptes tradicionals del Corpus de la cuina
    catalana (Institut Català de la Cuina), parsejat d'archive.org.
    157 receptes amb ingredients reals. El mode tradicional hi fa
    servir aquest banc per eliminar les repeticions.

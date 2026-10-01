@@ -1,6 +1,6 @@
 'use strict';
 /* ============================================================
-   Midweek — planificador de menú setmanal per a parelles
+   Àppats — planificador de menú setmanal per a parelles
    Fitxer 1/2: estat, persistència, menú, receptes, llista compra
    ============================================================ */
 
@@ -241,7 +241,7 @@ function pullFromGist() {
   /* User-Agent: GitHub la REBUTJA (403 "Request forbidden by administrative
      rules") sense aquest header. Els navegadors l'eliminen sols i envien el
      seu; en node/JSDOM (tests) és l'única que arriba. */
-  const UA='midweek/'+((typeof APP_VERSION!=='undefined')?APP_VERSION:'app');
+  const UA='appats/'+((typeof APP_VERSION!=='undefined')?APP_VERSION:'app');
   const authHeaders={Authorization:`token ${GIST_CFG.token}`,Accept:'application/vnd.github+json','User-Agent':UA};
   const anonHeaders={Accept:'application/vnd.github+json','User-Agent':UA};
   return _fetchTO(url,{headers:authHeaders})
@@ -288,7 +288,7 @@ function pushToGist(state) {
       Authorization:`token ${GIST_CFG.token}`,
       Accept:'application/vnd.github+json',
       'Content-Type':'application/json',
-      'User-Agent':((typeof APP_VERSION!=='undefined')?'midweek/'+APP_VERSION:'midweek')
+      'User-Agent':((typeof APP_VERSION!=='undefined')?'appats/'+APP_VERSION:'appats')
     },
     body:JSON.stringify({files:{'midweek-state.json':{content:data}}})
   })
@@ -354,11 +354,20 @@ function _curCols(){
 let _lastSnap=null;
 function refreshSnap(){try{_lastSnap=JSON.stringify(_curCols());}catch(e){_lastSnap=null;}}
 /* marca _lm als canviats i _del als desapareguts respecte a l'anterior snapshot */
+function whoAmI(){
+  try{
+    if(S.currentUser){const p=personById(S.currentUser);if(p)return p.name;}
+    const id=JSON.parse(localStorage.getItem('midweek_identity')||'null');
+    if(id&&id.name)return id.name;
+  }catch(e){}
+  return 'Anònim';
+}
 function stampLocalChanges(){
   if(_lastSnap===null)return;
   let prev;try{prev=JSON.parse(_lastSnap);}catch(e){return;}
   const now=Date.now();
   S._lm=S._lm||{};S._del=S._del||{};
+  const nB4=Object.keys(S._lm).length+Object.keys(S._del).length;
   /* array per id/nom */
   const cmp=(coll,prevArr,curArr,keyOf)=>{
   if(!Array.isArray(prevArr)||!Array.isArray(curArr))return;
@@ -393,6 +402,13 @@ function stampLocalChanges(){
   cmp('settlement',prev.settlements,c.settlements,s=>JSON.stringify(s));
   cmp('adjust',prev.balanceAdjusts,c.balanceAdjusts,a=>JSON.stringify(a));
   if(prev.diners!==c.diners)S._dinersT=now;
+  const nDesp=Object.keys(S._lm).length+Object.keys(S._del).length;
+  if(nDesp>nB4){
+    /* hi ha hagut un canvi real -> qui i quan. Camp GLOBAL: viatja al gist
+       i per tant CADA dispositiu veu l'última actualització de TOTHOM,
+       no només la seva (el SYNCINFO local només informa de la pròpia pujada) */
+    S.lastEdit={ts:now,by:whoAmI()};
+  }
 }
 
 /* merge intel·ligent per claus: cap dispositiu esborra el que l'altre ha afegit */
@@ -401,6 +417,10 @@ function mergeStates(local, remote) {
   if (!local) return remote;
   const rNewer=(remote._syncedAt||0)>=(local._syncedAt||0);
   const out=JSON.parse(JSON.stringify(local));
+  /* última actualització GLOBAL: guanya la més recent dels dos, perquè
+     a Opcions cada dispositiu vegi també els canvis d'UN ALTRE */
+  out.lastEdit=(((remote.lastEdit&&remote.lastEdit.ts)||0)>((local.lastEdit&&local.lastEdit.ts)||0))
+    ?remote.lastEdit:(local.lastEdit||remote.lastEdit||null);
   /* _lm / _del fusionats amb max PER CLAU: la memòria d'edicions i
      d'esborrats viatja, i cap dispositiu perd el seu timestamp local
      (Object.assign donaria prioritat al remot i el reversionaria) */
@@ -583,7 +603,8 @@ function applyRemote(remote){
     o.receipts||[],o.settlements||[],
     o.shoppingLists||[],o.shopping||{},o.categories||[],o.diners,
     (o.people||[]).map(p=>p.id+'|'+p.name+'|'+p.color),
-    o.balanceAdjusts||[],o._lm||{},o._del||{},o._dinersT||0
+    o.balanceAdjusts||[],o._lm||{},o._del||{},o._dinersT||0,
+    o.lastEdit||null
   ]);
   if(sig(merged)===sig(S))return false;
   Object.keys(merged).forEach(k=>{if(k!=='ui')S[k]=merged[k];});
@@ -745,13 +766,25 @@ function fmtDataHora(ts){
 function renderSyncInfo(){
   const el=document.getElementById('syncInfo');if(!el)return;
   let info=null;try{info=JSON.parse(localStorage.getItem(SYNCINFO_KEY)||'null');}catch(e){}
-  if(!info){el.textContent='Encara no s\u2019ha sincronitzat des d\u2019aquest dispositiu.';return;}
   let html='';
-  if(info.lastPushOk)html+='\ud83d\udce4 <b>\u00daltima pujada correcta:</b> '+fmtDataHora(info.lastPushOk.ts)+' \u00b7 feta per <b>'+esc(info.lastPushOk.by)+'</b><br>';
-  else html+='\ud83d\udce4 Encara no s\u2019ha pujat cap canvi des d\u2019aquest dispositiu.<br>';
+  /* 1) GLOBAL (viatja al gist): l'última edició de QUALSEVOL dispositiu */
+  const g=S.lastEdit;
+  if(g&&g.ts){
+    html+='🌍 <b>Última actualització (de qualsevol dispositiu):</b> '+fmtDataHora(g.ts)
+       +' · feta per <b>'+esc(g.by||'algú')+'</b><br>';
+  }else{
+    html+='🌍 Encara no hi ha cap canvi registrat a l’estat compartit.<br>';
+  }
+  /* 2) LOCAL: com ha anat la connexió D'AQUEST dispositiu */
+  if(!info){
+    html+='<span class="muted tiny">Aquest dispositiu encara no s’ha connectat.</span>';
+    el.innerHTML=html;return;
+  }
+  if(info.lastPushOk)html+='📤 <b>Aquest dispositiu ha pujat:</b> '+fmtDataHora(info.lastPushOk.ts)+' · feta per <b>'+esc(info.lastPushOk.by)+'</b><br>';
+  else html+='📤 Aquest dispositiu encara no ha pujat cap canvi.<br>';
   const l=info.last;
-  if(l.ok)html+='\u2705 \u00daltima comprovaci\u00f3: '+fmtDataHora(l.ts)+' \u00b7 '+esc(l.by)+' \u00b7 '+(l.dir==='push'?'pujada al gist':'baixada del gist');
-  else html+='\u26a0 <b>\u00daltim intent fallit:</b> '+fmtDataHora(l.ts)+' \u00b7 '+esc(l.detail||'error de xarxa');
+  if(l.ok)html+='✅ <b>Última comprovació:</b> '+fmtDataHora(l.ts)+' · '+esc(l.by)+' · '+(l.dir==='push'?'pujada al gist':'baixada del gist');
+  else html+='⚠ <b>Últim intent fallit:</b> '+fmtDataHora(l.ts)+' · '+esc(l.detail||'error de xarxa');
   el.innerHTML=html;
 }
 
@@ -1425,7 +1458,7 @@ $('#printMenuBtn').onclick=()=>{
     }
     rows+='<tr><td style="border:1px solid #999;padding:4px 6px;font-weight:bold">'+sl.l+'</td>'+cells+'</tr>';
   }
-  $('#printArea').innerHTML='<h2>Midweek — Menú '+fmtDate(weekStart)+' – '+fmtDate(new Date(weekStart.getTime()+6*86400000))+'</h2>'
+  $('#printArea').innerHTML='<h2>Àppats — Menú '+fmtDate(weekStart)+' – '+fmtDate(new Date(weekStart.getTime()+6*86400000))+'</h2>'
     +'<table style="border-collapse:collapse;min-width:90%"><tr><th></th>'+DAYS.map(d=>'<th style="padding:4px 6px">'+DAY_LONG[d]+'</th>').join('')+'</tr>'+rows+'</table>';
   window.print();
 };
