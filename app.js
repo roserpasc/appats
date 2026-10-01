@@ -267,6 +267,7 @@ function pullFromGist() {
     })
     .then(gist=>{
       const content=gist.files['midweek-state.json']?.content;
+      try{_lastPulledRev=(gist.history&&gist.history[0]&&gist.history[0].version)||null;}catch(e){}
       try{noteSync(true,'pull');}catch(e){}
       if(!content)return null;   /* gist buit */
       return JSON.parse(content);
@@ -635,6 +636,10 @@ let _syncRunning=false, _syncQueued=false, _syncTimer=null;
 /* un push que ha fallat (504/xarxa) es re-programa: els canvis locals NO es
    queden perduts esperant que algú faci un altre save */
 let PUSH_FAILED=false;
+/* revisió del gist vista a l'últim pull (history[0].version): serveix per
+   detectar la CARRERA pull→push (algú escriu entre el nostre pull i el
+   nostre push: el nostre PATCH el taparia) */
+let _lastPulledRev=null;
 function runSync(){
   if(!refreshGistCfg())return Promise.resolve(false);
   if(_syncRunning){_syncQueued=true;return Promise.resolve(false);}
@@ -650,13 +655,33 @@ function runSync(){
     } else if(remote)changed=applyRemote(remote);
     /* push només si el payload local difereix del remot (hi ha canvis
        locals pendents de puxar, o el merge ha produit quelcom nou).
-       pushSig ignora _syncedAt: sinó cada cicle empenyria un push buit. */
+       pushSig ignora _syncedAt: sinó cada cicle empenyia un push buit. */
     const localSig=pushSig(S);
     const remoteSig=remote?pushSig(remote):null;
-    if(localSig!==remoteSig){
-      return pushToGist(S).then(()=>changed).catch(()=>{PUSH_FAILED=true;return changed;});
-    }
-    return changed;
+    if(localSig===remoteSig)return changed;
+    /* CARRERA pull→push (demostrada al gist 1/10 16:11:58→16:12:03: el push
+       de David va tapar la persona que ella havia pujat 5s abans). El GET
+       del pull inclou gist.history[0].version = la revisió que hem LLEGIT.
+       Just ABANS de fer PATCH demanem /commits: si history[0].version ja no
+       és aquella, algú ha escrit al mig → merge i reintent (màx 3 rondes). */
+    const attempt=n=>{
+      return fetch('https://api.github.com/gists/'+GIST_CFG.gistId+'/commits?per_page=1',{
+        headers:{Authorization:`Bearer ${GIST_CFG.token}`,Accept:'application/vnd.github+json',
+                 'User-Agent':((typeof APP_VERSION!=='undefined')?'appats/'+APP_VERSION:'appats')}
+      }).then(r=>r.ok?r.json():[]).then(hs=>{
+        const head=(Array.isArray(hs)&&hs[0]&&hs[0].version)||null;
+        if(head&&_lastPulledRev&&head!==_lastPulledRev&&n>0){
+          /* el gist ha canviat des del nostre pull: re-pull + fusió + re-push */
+          return pullFromGist().then(r2=>{
+            if(r2===undefined){PUSH_FAILED=true;return changed;}
+            const ch2=applyRemote(r2);
+            return attempt(n-1).then(v=>ch2||v);
+          });
+        }
+        return pushToGist(S).then(()=>changed);
+      });
+    };
+    return attempt(2).catch(()=>{PUSH_FAILED=true;return changed;});
   }).catch(e=>{console.warn('sync error:',e);return false;}).finally(()=>{
     _syncRunning=false;
     if(_syncQueued){_syncQueued=false;scheduleSync(0);}
