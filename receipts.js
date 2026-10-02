@@ -800,9 +800,14 @@ function updateGistStatus(){
     el.style.color='#C77D46';
     return;
   }
-  el.style.color='';
   const cfg=(typeof getGistCfg==='function')?getGistCfg():null;
-  el.textContent=cfg?'✓ Sincronització activa amb aquest Gist.':'Sense credencials: cada dispositiu va per lliure.';
+  if(cfg){
+    el.textContent='✓ Sincronització activa amb aquest Gist.';
+    el.style.color='';
+  }else{
+    el.textContent='⚠ Sense credencials: AQUEST DISPOSITIU NO SINCRONITZA (va per lliure). Desa l\'ID de la gist i un token amb àmbit gist per connectar-lo.';
+    el.style.color='#C77D46';
+  }
 }
 $('#gistSaveBtn').onclick=()=>{
   const id=$('#gistIdInput').value.trim(), tok=$('#gistTokenInput').value.trim();

@@ -602,7 +602,12 @@ function applyRemote(remote){
     o.menu||{},
     (o.recipes||[]).filter(r=>!r.book).map(r=>r.id+'|'+r.name+'|'+r.category+'|'+r.time+'|'+r.servings+'|'+JSON.stringify(r.ingredients||[])),
     o.receipts||[],o.settlements||[],
-    o.shoppingLists||[],o.shopping||{},o.categories||[],o.diners,
+    o.shoppingLists||[],
+    /* PAPERERA: a la signatura per coherència amb pushSig — la majoria de
+       camins ja es detecten via _lm/_del, però si coincideixen i les llistes
+       difereixen, applyRemote l'ignoraria i el push local la treuria */
+    o.deletedLists||[],
+    o.shopping||{},o.categories||[],o.diners,
     (o.people||[]).map(p=>p.id+'|'+p.name+'|'+p.color),
     o.balanceAdjusts||[],o._lm||{},o._del||{},o._dinersT||0,
     o.lastEdit||null
@@ -792,6 +797,19 @@ function renderSyncInfo(){
   const el=document.getElementById('syncInfo');if(!el)return;
   let info=null;try{info=JSON.parse(localStorage.getItem(SYNCINFO_KEY)||'null');}catch(e){}
   let html='';
+  /* 0) DIAGNÒSTIC D'AQUEST DISPOSITIU: versió en execució + credencials.
+         Sense això no es pot distingir "l'app no sincronitza" de "el gist no
+         rep res" a distància (el camp sense credencials abans era silenciós:
+         runSync tornava false i cap línia ho deia) */
+  html+='📱 <b>Versió:</b> v'+((typeof APP_VERSION!=='undefined')?APP_VERSION:'?')+' · ';
+  let _cfg=null;try{_cfg=(typeof getGistCfg==='function')?getGistCfg():null;}catch(e){}
+  if(_cfg){
+    html+='🔗 <b>Credencials:</b> ✓ desades ('+esc(String(_cfg.gistId).slice(0,6))+'…)<br>';
+    if(typeof AUTH_BROKEN!=='undefined'&&AUTH_BROKEN)
+      html+='<span style="color:#C77D46">⚠ Token rebutjat per GitHub: aquest dispositiu LLEGEIX però NO pot puxar.<br></span>';
+  }else{
+    html+='<span style="color:#C77D46"><b>⚠ SENSE CREDENCIALS — aquest dispositiu NO sincronitza.</b> Desa l\'ID i el token a «Sincronització», més amunt.<br></span>';
+  }
   /* 1) GLOBAL (viatja al gist): l'última edició de QUALSEVOL dispositiu */
   const g=S.lastEdit;
   if(g&&g.ts){
