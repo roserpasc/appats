@@ -124,12 +124,26 @@ try{
    existeix (dev local), s'utilitzen les seves credencials. */
 /* Credencials Gist: es desen UN COP per dispositiu a localStorage (Opcions les pregunta).
    En dev local, config.js també funciona. Mai van incrustades al codi (GitHub ho bloqueja). */
+/* Netegem el que s'hagi enganxat malament (espais/salts de línia dins del token,
+   prefixos "Bearer "/"token " que algun usuari copia del curl): un token amb un
+   espai interior dóna 401 a GitHub i sembla "invàlid" estant bé. */
+function _normGistCfg(c){
+  return {gistId:String(c.gistId).trim(),
+          token:String(c.token).replace(/^(bearer|token)\s+/i,'').replace(/\s+/g,'')};
+}
+/* Empremta visible per comparar dos dispositius sense ensenyar el token sencer:
+   "ID fb5e8063… · token ghp_…sKGF" — ha de ser idèntica als dos. */
+function cfgFingerprint(cfg){
+  if(!cfg||!cfg.gistId||!cfg.token)return '';
+  const t=String(cfg.token),id=String(cfg.gistId);
+  return 'ID '+id.slice(0,8)+'… · token '+t.slice(0,4)+'…'+t.slice(-4);
+}
 function getGistCfg(){
   try{
     const ls=JSON.parse(localStorage.getItem('midweek_gist')||'null');
-    if(ls&&ls.gistId&&ls.token)return ls;
+    if(ls&&ls.gistId&&ls.token)return _normGistCfg(ls);
   }catch(e){}
-  if(typeof GIST_SYNC!=='undefined'&&GIST_SYNC&&GIST_SYNC.gistId&&GIST_SYNC.token)return GIST_SYNC;
+  if(typeof GIST_SYNC!=='undefined'&&GIST_SYNC&&GIST_SYNC.gistId&&GIST_SYNC.token)return _normGistCfg(GIST_SYNC);
   return null;
 }
 var GIST_CFG=getGistCfg();
@@ -811,7 +825,7 @@ function renderSyncInfo(){
   html+='📱 <b>Versió:</b> v'+((typeof APP_VERSION!=='undefined')?APP_VERSION:'?')+' · ';
   let _cfg=null;try{_cfg=(typeof getGistCfg==='function')?getGistCfg():null;}catch(e){}
   if(_cfg){
-    html+='🔗 <b>Credencials:</b> ✓ desades ('+esc(String(_cfg.gistId).slice(0,6))+'…)<br>';
+    html+='🔗 <b>Credencials:</b> ✓ desades · '+esc((typeof cfgFingerprint==='function'&&cfgFingerprint(_cfg))||(String(_cfg.gistId).slice(0,6)+'…'))+'<br>';
     if(typeof AUTH_BROKEN!=='undefined'&&AUTH_BROKEN)
       html+='<span style="color:#C77D46">⚠ Token rebutjat per GitHub: aquest dispositiu LLEGEIX però NO pot puxar.<br></span>';
   }else{

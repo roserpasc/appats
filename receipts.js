@@ -795,14 +795,15 @@ function renderGistCfg(){
    escrivint un token nou quan arriba la detecció d'error) */
 function updateGistStatus(){
   const el=$('#gistStatus');if(!el)return;
+  const cfg=(typeof getGistCfg==='function')?getGistCfg():null;
+  const fp=(typeof cfgFingerprint==='function'&&cfg)?cfgFingerprint(cfg):'';
   if(typeof AUTH_BROKEN!=='undefined'&&AUTH_BROKEN){
-    el.textContent='⚠ GitHub rebutja les credencials (token invàlid o sense l\u2019àmbit gist): genera\u2019n un de nou a GitHub → Settings → Developer settings → Personal access tokens (àmbit gist) i enganxa\u2019l aquí. Mentrestant aquest dispositiu LLEGEIX el gist però no hi pot escriure.';
+    el.textContent='⚠ GitHub rebutja les credencials (token invàlid o sense l\u2019àmbit gist): genera\u2019n un de nou a GitHub → Settings → Developer settings → Personal access tokens (àmbit gist) i enganxa\u2019l aquí. Tens desat: '+(fp||'(cap)')+'. Fes servir la 🔎 Prova la connexió: et dirà QUIN dels dos errors és (o qui és el teu @login).';
     el.style.color='#C77D46';
     return;
   }
-  const cfg=(typeof getGistCfg==='function')?getGistCfg():null;
   if(cfg){
-    el.textContent='✓ Sincronització activa amb aquest Gist.';
+    el.textContent='✓ Sincronització activa · '+fp;
     el.style.color='';
   }else{
     el.textContent='⚠ Sense credencials: AQUEST DISPOSITIU NO SINCRONITZA (va per lliure). Desa l\'ID de la gist i un token amb àmbit gist per connectar-lo.';
@@ -842,20 +843,45 @@ $('#gistProbeBtn').onclick=async function(){
   }
   out.textContent='… token de @'+who.login+' correcte; provant la gist';
   /* 2) aquest token pot accedir a la gist? */
-  let g={s:0,owner:'?'};
+  let g={s:0,owner:'?',gj:null};
   try{
     const r=await fetch('https://api.github.com/gists/'+id,{headers:Object.assign({Authorization:'Bearer '+tok},H)});
     g.s=r.status;
-    if(r.ok){const j=await r.json().catch(()=>({}));g.owner=((j.owner&&j.owner.login)||'?')+(j.public?' (gist pública)':' (gist PRIVADA)');}
+    if(r.ok){const j=await r.json().catch(()=>({}));g.gj=j;g.owner=((j.owner&&j.owner.login)||'?')+(j.public?' (gist pública)':' (gist PRIVADA)');}
   }catch(e){g.s='ERR '+e.message;}
-  if(g.s===200){
-    out.textContent='✓ Tot correcte — token de @'+who.login+', gist '+g.owner+', ID '+id.slice(0,8)+'…. Pots sincronitzar.';
+  if(g.s===404){
+    out.textContent='✗ El teu token (@'+who.login+') NO pot accedir a aquesta gist (ID '+id.slice(0,8)+'…): o pertany a un altre compte de GitHub, o el token s\u2019ha creat SENSE l\u2019àmbit gist (una gist privada dóna 404 en els dos casos). Solució: token fet amb @roserpas (el compte de la gist) i ÀMBIT GIST marcat.';
+    out.style.color='#C77D46';return;
+  }
+  if(g.s!==200){
+    out.textContent='? Token correcte (@'+who.login+') però la gist respon HTTP '+g.s+'.';
+    out.style.color='#C77D46';return;
+  }
+  /* 3) prova d'ESCRIPTURA: re-escrig el mateix contingut (no canvia res, però
+     un token sense l'àmbit gist rep 403 aquí — abans això no es podia distingir
+     d'un token d'un altre compte) */
+  out.textContent='… provant si hi pot ESCRIURE';
+  let w={s:0,msg:''};
+  try{
+    const gj=g.gj||{},gf=gj.files||{},files={};
+    Object.keys(gf).forEach(n=>{if(typeof gf[n].content==='string')files[n]={content:gf[n].content};});
+    const r=await fetch('https://api.github.com/gists/'+id,{method:'PATCH',
+      headers:Object.assign({'Content-Type':'application/json'},H,{Authorization:'Bearer '+tok}),
+      body:JSON.stringify({description:gj.description||'',files:files})});
+    w.s=r.status;
+    if(!r.ok)w.msg=(await r.json().catch(()=>({}))).message||'';
+  }catch(e){w.s='ERR '+e.message;}
+  if(w.s===200){
+    out.textContent='✓ Tot correcte — token de @'+who.login+', '+g.owner+', ID '+id.slice(0,8)+'… i POT ESCRIURE. Pots sincronitzar.';
     out.style.color='#5E8772';
-  }else if(g.s===404){
-    out.textContent='✗ El teu token (@'+who.login+') NO pot accedir a aquesta gist (ID '+id.slice(0,8)+'…): existeix però pertany a un altre compte de GitHub → 404 i no hi pot escriure. Solució: un token fet amb el compte de la gist, o una gist nova feta amb el teu compte.';
+  }else if(w.s===403){
+    out.textContent='✗ Token de @'+who.login+' vàlid però NO POT ESCRIURE la gist (HTTP 403'+(w.msg?' — '+w.msg:'')+'): li falta l\u2019àmbit gist. Regenera\u2019l a GitHub → Settings → Developer settings → Personal access tokens i MARCA ÀMBIT GIST, amb el compte @roserpas.';
+    out.style.color='#C77D46';
+  }else if(w.s===401){
+    out.textContent='✗ Token rebutjat (HTTP 401) en escriure: és invàlid o ha caducat. Genera\u2019n un de nou (àmbit gist, compte @roserpas) i enganxa\u2019l aquí.';
     out.style.color='#C77D46';
   }else{
-    out.textContent='? Token correcte (@'+who.login+') però la gist respon HTTP '+g.s+'.';
+    out.textContent='? @'+who.login+' llegeix la gist però l\u2019escriptura respon HTTP '+w.s+(w.msg?' ('+w.msg+')':'')+'.';
     out.style.color='#C77D46';
   }
 };
