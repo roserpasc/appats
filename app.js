@@ -1115,13 +1115,13 @@ function renderMenu(){
      amplades del contingut, així que la taula sempre càpigua dins el que el
      contenidor pot desplaçar (sense marge blanc a la dreta) */
   let html='<colgroup><col style="width:74px">'+Array(7).fill('<col>').join('')+'</colgroup>'
-    +'<tr><th style="width:74px"></th>'+DAYS.map((d,i)=>{
+    +'<thead><tr><th style="width:74px"></th>'+DAYS.map((d,i)=>{
     const dt=new Date(weekStart.getTime()+i*86400000);
     const today=iso(dt)===t;
     return '<th class="'+(today?'today-col':'')+'">'+DAY_LONG[d]
       +'<br><span class="muted tiny" style="font-weight:400">'+fmtDate(dt)+'</span>'
       +(today?' 📍':'')+'</th>';
-  }).join('')+'</tr>';
+  }).join('')+'</tr></thead><tbody>';
   for(const sl of SLOTS){
     html+='<tr><th style="text-align:left;font-size:14px">'+sl.l+'</th>';
     for(let i=0;i<7;i++){
@@ -1150,12 +1150,12 @@ function renderMenu(){
           +(m.by&&personById(m.by)?'<span class="by-chip" title="Posat per '+esc(personById(m.by).name)+'"><span class="dotc" style="background:'+esc(personById(m.by).color)+'"></span>'+esc(personById(m.by).name)+'</span>':'')
           +'<button class="x" data-del-key="'+key+'" data-del-idx="'+idx+'" title="Elimina">✕</button></div>';
       });
-      html+='<td class="slot'+(meals.length?'':' empty')+'" data-drop-key="'+key+'">'+chips
+      html+='<td class="slot'+(meals.length?'':' empty')+'" data-slot="'+sl.l+'" data-drop-key="'+key+'">'+chips
         +'<button class="add-meal" data-add-key="'+key+'" title="Afegeix àpat">+</button></td>';
     }
     html+='</tr>';
   }
-  tbl.innerHTML=html;
+  tbl.innerHTML=html+'</tbody>';
 }
 
 function pushMeal(key,meal){
