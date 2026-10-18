@@ -368,7 +368,14 @@ function stampLocalChanges(){
   let prev;try{prev=JSON.parse(_lastSnap);}catch(e){return;}
   const now=Date.now();
   S._lm=S._lm||{};S._del=S._del||{};
-  const nB4=Object.keys(S._lm).length+Object.keys(S._del).length;
+  /* Abans es comptaven CLAUS NOVES (nDesp>nB4): editar una entitat EXISTENT
+     actualitzava _lm[k] però no canviava el comptador → lastEdit NO es
+     refrescava → la línia 🌍 d'Opcions quedava amb la data d'una creació
+     antiga tot i haver edicions/pujades recents. Ara es compara el CONTINGUT
+     d'_lm/_del/_dinersT: qualsevol stamp real (creació, edició o esborrat)
+     actualitza l'última actualització global. */
+  const _blob=()=>JSON.stringify([S._lm,S._del,S._dinersT||0]);
+  const before=_blob();
   /* array per id/nom */
   const cmp=(coll,prevArr,curArr,keyOf)=>{
   if(!Array.isArray(prevArr)||!Array.isArray(curArr))return;
@@ -403,11 +410,11 @@ function stampLocalChanges(){
   cmp('settlement',prev.settlements,c.settlements,s=>JSON.stringify(s));
   cmp('adjust',prev.balanceAdjusts,c.balanceAdjusts,a=>JSON.stringify(a));
   if(prev.diners!==c.diners)S._dinersT=now;
-  const nDesp=Object.keys(S._lm).length+Object.keys(S._del).length;
-  if(nDesp>nB4){
-    /* hi ha hagut un canvi real -> qui i quan. Camp GLOBAL: viatja al gist
-       i per tant CADA dispositiu veu l'última actualització de TOTHOM,
-       no només la seva (el SYNCINFO local només informa de la pròpia pujada) */
+  if(_blob()!==before){
+    /* hi ha hagut un canvi real (creació, EDICIÓ o esborrat) -> qui i quan.
+       Camp GLOBAL: viatja al gist i per tant CADA dispositiu veu
+       l'última actualització de TOTHOM, no només la seva (el SYNCINFO local
+       només informa de la pròpia pujada) */
     S.lastEdit={ts:now,by:whoAmI()};
   }
 }
