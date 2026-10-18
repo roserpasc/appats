@@ -11,6 +11,12 @@
 /* ---- visibilitat de tiquets ocults ---- */
 /* un tiquet ocult el veuen: qui el va escanejar (payer) i la persona que impliqua el splitWith */
 function canSeeReceipt(rc,viewerId){
+  /* acord de visibilitat explícit (v84): buit = tothom; omplit = només el
+     creador i els triats — cap altre usuari el veu ni al balanç */
+  if(Array.isArray(rc.visibleTo)&&rc.visibleTo.length){
+    if(!viewerId)return false;
+    return rc.visibleTo.indexOf(viewerId)>=0;
+  }
   if(!rc.hidden)return true;
   if(!viewerId)return false; /* 'tothom (compartit)' no veu ocults */
   if(rc.payerId===viewerId)return true;
@@ -18,11 +24,14 @@ function canSeeReceipt(rc,viewerId){
   return false;
 }
 function receiptInvolved(rc,personId){
+  /* tiquet amb visibilitat acotada: es reparteix NOMÉS entre els que el veuen */
+  if(Array.isArray(rc.visibleTo)&&rc.visibleTo.length)return rc.visibleTo.indexOf(personId)>=0;
   if(!rc.splitWith||rc.splitWith==='')return true;
   if(rc.splitWith==='none')return rc.payerId===personId;
   return rc.payerId===personId||rc.splitWith===personId;
 }
 function receiptShareCount(rc){
+  if(Array.isArray(rc.visibleTo)&&rc.visibleTo.length)return rc.visibleTo.length;
   if(!rc.splitWith||rc.splitWith==='')return S.people.length||2;
   if(rc.splitWith==='none')return 1;
   return 2;
@@ -156,9 +165,15 @@ $('#draftStore').oninput=e=>{if(draft)draft.store=e.target.value;};
 
 function renderPayerSelect(){
   const sel=$('#draftPayer');
-  const cur=draft?draft.payerId:(S.people[0]||{}).id;
-  sel.innerHTML=S.people.map(p=>'<option value="'+p.id+'"'+(p.id===cur?' selected':'')+'>'+esc(p.name)+'</option>').join('')
+  /* per defecte: l'usuari D'AQUEST dispositiu — no cal seleccionar qui el fa */
+  const me=S.currentUser||'';
+  const cur=draft?draft.payerId:(me||(S.people[0]||{}).id);
+  sel.innerHTML=S.people.map(p=>'<option value="'+p.id+'"'+(p.id===cur?' selected':'')+'>'+esc(p.name)+(p.id===me?' (jo)':'')+'</option>').join('')
     ||'<option value="">—</option>';
+  /* qui el veu (v84): per defecte tothom; triant una persona → parella */
+  const vis=$('#draftVis');
+  if(vis)vis.innerHTML='<option value="">Tothom (per defecte)</option>'
+    +S.people.map(p=>'<option value="'+p.id+'"'+(draft&&draft.visId===p.id?' selected':'')+'>'+esc(p.name)+(p.id===me?' (jo)':'')+'</option>').join('');
   /* splitWith: amb qui es comparteix la compra */
   const sel2=$('#draftSplitWith');
   const opts='<option value="">amb tothom</option>'
@@ -168,7 +183,7 @@ function renderPayerSelect(){
 }
 $('#draftPayer').onchange=e=>{if(draft)draft.payerId=e.target.value;};
 $('#draftSplitWith').onchange=e=>{if(draft)draft.splitWith=e.target.value||''};
-$('#draftHidden').onchange=e=>{if(draft)draft.hidden=e.target.value==='1';};
+$('#draftVis').onchange=e=>{if(draft)draft.visId=e.target.value||'';};
 
 /* desar compra */
 $('#saveReceiptBtn').onclick=()=>{
@@ -208,11 +223,15 @@ function commitReceipt(items,listIds){
   finishReceipt(items,listIds);
 }
 function finishReceipt(items,listIds){
+  /* creador = usuari detectat d'aquest dispositiu (no es demana) + qui el veu */
+  const creator=S.currentUser||draft.payerId||(S.people[0]||{}).id||'';
   const receipt={
     id:uid(),date:draft.date||todayIso(),
     store:draft.store||'',payerId:draft.payerId||(S.people[0]||{}).id,
     splitWith:draft.splitWith||'',
     hidden:draft.hidden||false,
+    createdBy:creator,
+    visibleTo:(draft&&draft.visId)?[creator,draft.visId].filter((v,i,a)=>v&&a.indexOf(v)===i):[],
     items:items,
     listIds:listIds||[],
     photo:draft.photo||null,
@@ -308,6 +327,9 @@ async function scanImage(dataUrl){
     setProgress(70,'Processant resposta…');
     if(!res.ok){
       const txt=await res.text().catch(()=>'');
+      if(res.status===401)throw new Error('la clau d\'OpenRouter no és vàlida (401 «User not found»): obre Opcions → 🤖 IA i enganxa una clau sk-or-v1-… teva (openrouter.ai/keys) i verifica-la amb el botó «Prova».');
+      if(res.status===402)throw new Error('OpenRouter no té crèdit al compte (402): recarrega saldo o canvia de clau.');
+      if(res.status===429)throw new Error('Massa peticions (429): espera uns segons i ho tornes a provar.');
       throw new Error('HTTP '+res.status+' — '+txt.slice(0,180));
     }
     const data=await res.json();
@@ -408,7 +430,7 @@ function renderReceipts(){
       +'<span class="rs-meta">'+esc(fmtShortDate(rc.date))+'</span>'
       +(payer?'<span class="rs-payer"><span class="dotc" style="background:'+esc(payer.color)+'"></span>'+esc(payer.name)+'</span>':'<span class="rs-meta">—</span>')
       +'<span class="rs-total">'+eur(total)+'</span>'
-      +(rc.hidden?'<span class="tag" title="Tiquet ocult">🔒</span>':'')
+      +((rc.hidden||(rc.visibleTo||[]).length)?'<span class="tag" title="'+((rc.visibleTo||[]).length?'Visible només per als seleccionats':'Tiquet ocult')+'">🔒</span>':'')
       +'</summary>'
       +'<div class="receipt-detail">'
       +'<div class="muted tiny" style="margin-bottom:6px">'+esc(fmtLongDate(rc.date))
@@ -439,7 +461,9 @@ function splitFor(receipt){
   });
 }
 function renderSplitChips(rc){
-  const parts=splitFor(rc);
+  let parts=splitFor(rc);
+  /* tiquet acotat: només es mostren els que el veuen */
+  if((rc.visibleTo||[]).length)parts=parts.filter(pt=>rc.visibleTo.indexOf(pt.person.id)>=0);
   return '<div class="splits">'+parts.map(pt=>
     '<div class="split-chip" style="border-color:'+esc(pt.person.color)+'55">'
     +'<span class="tiny muted"><span class="dotc" style="background:'+esc(pt.person.color)+'"></span>'+esc(pt.person.name)+'</span>'
@@ -774,14 +798,29 @@ function dummyViewerSelect(){}
 
 $('#testKeyBtn').onclick=async()=>{
   const out=$('#keyTestResult');
-  out.textContent='Provant…';
+  const key=(S.settings.apiKey||'').trim();
+  if(!key){out.textContent='✗ Primer enganxa una clau sk-or-v1-… (openrouter.ai/keys).';out.style.color='#C77D46';return;}
+  out.textContent='Provant…';out.style.color='';
   try{
-    const res=await fetch('https://openrouter.ai/api/v1/models',{headers:{'Authorization':'Bearer '+S.settings.apiKey}});
+    /* /auth/key valida DE BONA: /models és públic i torna 200 amb qualsevol
+       cosa — abans això feia dir "✓ Clau vàlida" fins i tot amb una clau
+       inventada, i l'escaneig després queia amb 401 «User not found». */
+    const res=await fetch('https://openrouter.ai/api/v1/auth/key',{headers:{'Authorization':'Bearer '+key}});
     if(res.ok){
-      const j=await res.json();
-      out.textContent='✓ Clau vàlida — '+j.data.length+' models disponibles.';
-    }else out.textContent='✗ Error HTTP '+res.status+' — revisa la clau.';
-  }catch(e){out.textContent='✗ Error de xarxa: '+e.message;}
+      const j=await res.json().catch(()=>({}));const d=(j&&j.data)||{};
+      out.textContent='✓ Clau acceptada per OpenRouter'+(d.label?' — «'+d.label+'»':'')
+        +(d.usage!=null?' · usage '+d.usage:'')+(d.limit!=null?' / límit '+d.limit:'')+'.';
+      out.style.color='#5E8772';
+    }else{
+      const j=await res.json().catch(()=>({}));const m=((j&&j.error&&j.error.message)||'').toLowerCase();
+      if(m.indexOf('user not found')>=0)
+        out.textContent='✗ Aquesta clau NO existeix a OpenRouter (401 «User not found»): crea\u2019n una a openrouter.ai/keys (compte i clau sk-or-v1-…) i enganxa-la aquí. Després torna a prémer Prova.';
+      else if(m.indexOf('authentication')>=0||m.indexOf('cookie')>=0)
+        out.textContent='✗ OpenRouter no accepta aquesta clau (401): ha de ser una clau sk-or-v1-… completa i vigent.';
+      else out.textContent='✗ Error HTTP '+res.status+' — '+((j&&j.error&&j.error.message)||'revisa la clau')+'.';
+      out.style.color='#C77D46';
+    }
+  }catch(e){out.textContent='✗ Error de xarxa: '+e.message;out.style.color='#C77D46';}
 };
 
 /* ---- credencials de sincronització Gist (per dispositiu) ---- */

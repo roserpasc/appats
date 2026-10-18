@@ -136,8 +136,11 @@
           <div class="grow"><label>Comparteix amb</label><select id="draftSplitWith"></select></div>
         </div>
         <div class="row" style="margin:10px 0">
-          <div class="grow"><label>Ocult</label>
-            <select id="draftHidden"><option value="">No (visible a tothom)</option><option value="1">Sí (només pagador + compartits)</option></select>
+          <div class="grow"><label>Qui el veu</label>
+            <select id="draftVis">
+              <option value="">Tothom (per defecte)</option>
+            </select>
+            <p class="muted tiny" style="margin:4px 0 0">En triar-hi una persona, el tiquet el veuran <b>només tu</b> (l'usuari d'aquest dispositiu) <b>i ella</b>; la resta no el veuran ni al balanç.</p>
           </div>
         </div>
         <div class="draft-items" id="draftTable"></div>
@@ -283,7 +286,7 @@
 <div id="toastSlot"></div>
 
 <script>
-const APP_VERSION='83';
+const APP_VERSION='84';
 /* Service worker: comprova actualitzacions activament (carrega + cada 5 min + al tornar a l'app) */
 if("serviceWorker" in navigator){
   const swReg=navigator.serviceWorker.register("sw.js").then(reg=>{
