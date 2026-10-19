@@ -84,8 +84,12 @@
   <div id="listsWrap"></div>
   <div class="card hidden" id="listDetailCard">
     <div class="toolbar" style="margin-bottom:6px">
-      <input id="listNameInput" style="font-weight:600;max-width:260px" placeholder="Nom de la llista">
-      <select id="listCreatedBy" style="max-width:150px"></select>
+      <input id="listNameInput" style="font-weight:600;max-width:260px;flex:1 1 150px;min-width:0" placeholder="Nom de la llista">
+      <select id="listCreatedBy" style="max-width:130px"></select>
+      <details class="vis-dd" id="listVisDD" style="flex:1 1 160px;min-width:0">
+        <summary><span aria-hidden="true">👁</span> <b id="listVisLbl">Qui la veu: tothom</b></summary>
+        <div class="vis-opts"></div>
+      </details>
       <div class="spacer"></div>
       <button class="btn-sm" id="printListBtn">🖨 Imprimir</button>
       <button class="btn-sm" id="toListBtn">→ Registrar tiquet</button>
@@ -127,20 +131,18 @@
         </div>
         <div id="aiBannerSlot"></div>
         <div id="draftPhotoSlot"></div>
-        <div class="row" style="margin:10px 0">
+        <div class="row" style="margin:6px 0">
           <div><label>Data</label><input type="date" id="draftDate"></div>
           <div class="grow"><label>Tenda</label><input id="draftStore" placeholder="ex. Mercadona"></div>
           <div><label>Pagat per</label><select id="draftPayer"></select></div>
         </div>
-        <div class="row" style="margin:10px 0">
+        <div class="row" style="margin:6px 0">
           <div class="grow"><label>Comparteix amb</label><select id="draftSplitWith"></select></div>
-        </div>
-        <div class="row" style="margin:10px 0">
           <div class="grow"><label>Qui el veu</label>
-            <select id="draftVis">
-              <option value="">Tothom (per defecte)</option>
-            </select>
-            <p class="muted tiny" style="margin:4px 0 0">En triar-hi una persona, el tiquet el veuran <b>només tu</b> (l'usuari d'aquest dispositiu) <b>i ella</b>; la resta no el veuran ni al balanç.</p>
+            <details class="vis-dd" id="draftVisDD">
+              <summary><span aria-hidden="true">👁</span> <b id="draftVisLbl">Qui la veu: tothom</b></summary>
+              <div class="vis-opts"></div>
+            </details>
           </div>
         </div>
         <div class="draft-items" id="draftTable"></div>
@@ -269,9 +271,12 @@
       <p class="muted" id="syncInfo" style="margin-top:0">—</p>
 
       <hr class="sep">
-      <h3 style="margin-bottom:6px">🗑 Llistes eliminades — paperera (10 dies)</h3>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
+        <h3 style="margin:0">🗑 Llistes eliminades — paperera (10 dies)</h3>
+        <button class="btn btn-sm" id="trashToggleBtn" type="button" aria-expanded="false">▸ Mostra</button>
+      </div>
       <p class="muted tiny" style="margin-top:0">Esborrar una llista no la destrueix: queda aquí durant 10 dies. Pots veure-la i tornar-la a posar com si fos actual, per no perdre llistes llargues per error. Passats 10 dies s'esborra sola.</p>
-      <div id="trashList" class="backup-list"></div>
+      <div id="trashList" class="backup-list collapsed"></div>
     </div>
   </div>
 </section>
@@ -286,7 +291,7 @@
 <div id="toastSlot"></div>
 
 <script>
-const APP_VERSION='84';
+const APP_VERSION='85';
 /* Service worker: comprova actualitzacions activament (carrega + cada 5 min + al tornar a l'app) */
 if("serviceWorker" in navigator){
   const swReg=navigator.serviceWorker.register("sw.js").then(reg=>{

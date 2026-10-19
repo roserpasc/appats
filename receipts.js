@@ -170,10 +170,9 @@ function renderPayerSelect(){
   const cur=draft?draft.payerId:(me||(S.people[0]||{}).id);
   sel.innerHTML=S.people.map(p=>'<option value="'+p.id+'"'+(p.id===cur?' selected':'')+'>'+esc(p.name)+(p.id===me?' (jo)':'')+'</option>').join('')
     ||'<option value="">—</option>';
-  /* qui el veu (v84): per defecte tothom; triant una persona → parella */
-  const vis=$('#draftVis');
-  if(vis)vis.innerHTML='<option value="">Tothom (per defecte)</option>'
-    +S.people.map(p=>'<option value="'+p.id+'"'+(draft&&draft.visId===p.id?' selected':'')+'>'+esc(p.name)+(p.id===me?' (jo)':'')+'</option>').join('');
+  /* qui el veu (v85): multi — per defecte tothom; 1 o més persones → només elles */
+  const dd=$('#draftVisDD');
+  if(dd&&dd.__visRefresh)dd.__visRefresh();
   /* splitWith: amb qui es comparteix la compra */
   const sel2=$('#draftSplitWith');
   const opts='<option value="">amb tothom</option>'
@@ -183,7 +182,7 @@ function renderPayerSelect(){
 }
 $('#draftPayer').onchange=e=>{if(draft)draft.payerId=e.target.value;};
 $('#draftSplitWith').onchange=e=>{if(draft)draft.splitWith=e.target.value||''};
-$('#draftVis').onchange=e=>{if(draft)draft.visId=e.target.value||'';};
+/* el desplegable multi "Qui el veu" es regeix amb bindVisDD (app.js) */
 
 /* desar compra */
 $('#saveReceiptBtn').onclick=()=>{
@@ -191,8 +190,8 @@ $('#saveReceiptBtn').onclick=()=>{
   const items=draft.items.filter(i=>i.name.trim())
     .map(i=>Object.assign({},i,{name:i.name.trim(),unit:(i.unit||'').trim()}));
   if(!items.length){toast('Totes les línies són buides.');return;}
-  /* si hi ha llistes de compra: demanar per a quines és el tiquet */
-  const lists=S.shoppingLists||[];
+  /* si hi ha llistes de compra: demanar per a quines és el tiquet (v85: només les visibles per a mi) */
+  const lists=(S.shoppingLists||[]).filter(l=>canSeeList(l,S.currentUser||''));
   if(lists.length&&!draft.fromLists){
     openReceiptListsModal(lists,items);
     return;
@@ -204,7 +203,7 @@ $('#saveReceiptBtn').onclick=()=>{
 function openReceiptListsModal(lists,items){
   openModal('<h2>A quines llistes va aquest tiquet?</h2>'
     +'<p class="muted">Els productes que coincideixin es marcaran com a comprats a les llistes triades.</p>'
-    +lists.map(l=>'<label style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #EDF2EE">'
+    +lists.filter(l=>canSeeList(l,S.currentUser||'')).map(l=>'<label style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid #EDF2EE">'
       +'<input type="checkbox" class="rc-list" data-id="'+l.id+'" style="accent-color:var(--accent)">'
       +'<span><b>'+esc(l.name)+'</b>'+(l.createdBy?' <span class="tiny muted">· per '+esc(l.createdBy)+'</span>':'')+'</span></label>').join('')
     +'<div class="modal-foot"><button class="btn" id="rcListsNone">Cap llista</button>'
@@ -231,7 +230,7 @@ function finishReceipt(items,listIds){
     splitWith:draft.splitWith||'',
     hidden:draft.hidden||false,
     createdBy:creator,
-    visibleTo:(draft&&draft.visId)?[creator,draft.visId].filter((v,i,a)=>v&&a.indexOf(v)===i):[],
+    visibleTo:(draft&&draft.visIds&&draft.visIds.length)?[creator].concat(draft.visIds).filter((v,i,a)=>v&&a.indexOf(v)===i):[],
     items:items,
     listIds:listIds||[],
     photo:draft.photo||null,
@@ -691,6 +690,10 @@ $('#apiKeyInput').oninput=debounce(e=>{
 $('#modelSelect').value=S.settings.model||'google/gemini-2.5-flash';
 $('#modelSelect').onchange=e=>{S.settings.model=e.target.value;save();toast('Model: '+e.target.value);};
 /* botons de la paperera de llistes: delegació a app.js (#trashList) */
+/* v85: desplegable multi "Qui el veu" de l'esborrany de tiquet */
+bindVisDD('draftVisDD','draftVisLbl',
+  function(){return draft?(draft.visIds||[]):[];},
+  function(v){if(draft)draft.visIds=v;});
 
 /* ============================================================
    IDENTITAT: login/anònim/crear — sense PIN, memòria per dispositiu

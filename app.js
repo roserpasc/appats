@@ -938,7 +938,20 @@ function renderTrash(){
       +'<button class="btn btn-sm" data-view-trash="'+esc(l.id)+'">👁 Veure</button>'
       +'<button class="btn btn-sm" data-restore-trash="'+esc(l.id)+'">♻️ Restaurar</button></span></div>';
   }).join('');
+  applyTrashToggle();
 }
+/* paperera plegable per defecte (v85) */
+let trashOpen=false;
+function applyTrashToggle(){
+  const el=document.getElementById('trashList');const b=document.getElementById('trashToggleBtn');
+  if(!el)return;
+  el.classList.toggle('collapsed',!trashOpen);
+  if(b){const n=trashLists().length;b.textContent=(trashOpen?'▾ Amaga':'▸ Mostra')+(n?' ('+n+')':'');b.setAttribute('aria-expanded',String(trashOpen));}
+}
+(function(){
+  const tg=document.getElementById('trashToggleBtn');
+  if(tg)tg.addEventListener('click',()=>{trashOpen=!trashOpen;applyTrashToggle();});
+})();
 /* delegació: veure / restaurar (paperera i modal) */
 (function(){
   const fire=(e)=>{
@@ -1876,43 +1889,87 @@ function guessCategory(name){
   return 'Altres';
 }
 
+/* ============ QUI LA VEU (multi, v85) — compartit amb receipts.js ============
+   Array buit = tothom; 1 o més ids = només aquestes persones (+ qui crea). */
+function defaultCreatorName(){try{const n=(typeof whoAmI==='function')?whoAmI():'';return (n&&n!=='Anònim')?n:'';}catch(e){return '';}}
+function canSeeList(l,viewerId){
+  if(!l||!Array.isArray(l.visibleTo)||!l.visibleTo.length)return true;
+  if(!viewerId)return false;
+  return l.visibleTo.indexOf(viewerId)>=0;
+}
+function visSummaryText(sel){
+  if(!sel||!sel.length)return 'tothom';
+  return sel.map(id=>{const p=personById(id);return p?p.name:'?';}).join(', ');
+}
+function renderVisOpts(box,sel){
+  if(!box)return;
+  sel=sel||[];
+  box.innerHTML='<label class="vis-opt"><input type="checkbox" data-vis-all'+(sel.length?'':' checked')+'><span>Tothom</span></label>'
+    +S.people.map(p=>'<label class="vis-opt"><input type="checkbox" data-vis="'+esc(p.id)+'"'+(sel.indexOf(p.id)>=0?' checked':'')+'><span>'+esc(p.name)+(p.id===(S.currentUser||'')?' (jo)':'')+'</span></label>').join('')
+    +'<span class="vis-hint">Per defecte ho veu tothom. En marcar 1 o més persones, el veuran només elles (i qui ho crea).</span>';
+}
+function bindVisDD(boxId,lblId,getSel,setSel){
+  const box=document.getElementById(boxId);if(!box)return null;
+  const opts=box.querySelector('.vis-opts');
+  const lbl=document.getElementById(lblId);
+  const refresh=()=>{const s=(getSel()||[]);renderVisOpts(opts,s);if(lbl)lbl.textContent='Qui la veu: '+visSummaryText(s);};
+  box.addEventListener('change',e=>{
+    const t=e.target;
+    if(t&&t.hasAttribute('data-vis-all')&&t.checked)opts.querySelectorAll('[data-vis]').forEach(c=>{c.checked=false;});
+    else if(t&&t.hasAttribute('data-vis')&&t.checked){const a=opts.querySelector('[data-vis-all]');if(a)a.checked=false;}
+    const picked=[].slice.call(opts.querySelectorAll('[data-vis]')).filter(c=>c.checked).map(c=>c.getAttribute('data-vis'));
+    setSel(picked);
+    if(lbl)lbl.textContent='Qui la veu: '+visSummaryText(picked);
+  });
+  refresh();
+  box.__visRefresh=refresh;
+  return refresh;
+}
 /* ============ LLISTES DE COMPRA INDEPENDENTS ============ */
 let curListId=null;
 function curList(){return byId(S.shoppingLists||[],curListId)||null;}
 function ensureList(name,createdBy){
-  const l={id:uid(),name:name||('Llista '+(S.shoppingLists.length+1)),createdBy:createdBy||'',items:[],createdAt:Date.now()};
+  /* v85: creador per defecte = l'usuari connectat d'aquest dispositiu */
+  if(createdBy===undefined||createdBy==='')createdBy=defaultCreatorName();
+  const l={id:uid(),name:name||('Llista '+(S.shoppingLists.length+1)),createdBy:createdBy||'',visibleTo:[],items:[],createdAt:Date.now()};
   S.shoppingLists.push(l);curListId=l.id;save();renderLists();return l;
 }
 function renderLists(){
   const wrap=$('#listsWrap');if(!wrap)return;
-  const ls=S.shoppingLists||[];
+  const viewer=S.currentUser||'';
+  const all=S.shoppingLists||[];
+  const ls=all.filter(l=>canSeeList(l,viewer));   /* v85: només les visibles per a mi */
   if(!ls.length){
-    wrap.innerHTML='<div class="card"><p class="empty-hint">Encara no hi ha llistes. Crea «+ Llista nova» o «✨ Generar des del menú».</p></div>';
+    wrap.innerHTML='<div class="card"><p class="empty-hint">'+(all.length?'Cap llista és visible per a tu.':'Encara no hi ha llistes. Crea «+ Llista nova» o «✨ Generar des del menú».')+'</p></div>';
     $('#listDetailCard').classList.add('hidden');
     return;
   }
   wrap.innerHTML=ls.map(l=>{
     const pend=(l.items||[]).filter(i=>!i.done).length;
     const by=l.createdBy?'<span class="src-note">· per '+esc(l.createdBy)+'</span>':'';
+    const lock=(l.visibleTo||[]).length?' <span title="Visible només per a persones concretes">🔒</span>':'';
     return '<div class="card list-card'+(l.id===curListId?' sel':'')+'" data-list="'+l.id+'" style="cursor:pointer;display:flex;align-items:center;gap:10px;padding:12px 16px">'
       +'<span class="dotc" style="background:'+(l.id===curListId?'var(--accent)':'var(--line)')+'"></span>'
-      +'<div style="flex:1;min-width:0"><b>'+esc(l.name)+'</b> '+by
+      +'<div style="flex:1;min-width:0"><b>'+esc(l.name)+'</b>'+lock+' '+by
       +'<div class="tiny muted">'+l.items.length+' productes · '+pend+' pendents</div></div>'
       +'<button class="btn btn-sm" data-openlist="'+l.id+'">Obre</button></div>';
   }).join('');
   const cur=curList();
-  $('#listDetailCard').classList.toggle('hidden',!cur);
-  if(cur){
+  const curOk=cur&&canSeeList(cur,viewer);
+  $('#listDetailCard').classList.toggle('hidden',!curOk);
+  if(curOk){
     $('#listNameInput').value=cur.name;
     fillCreatedBy();
     $('#listCreatedBy').value=cur.createdBy||'';
+    const dd=$('#listVisDD');if(dd&&dd.__visRefresh)dd.__visRefresh();
     renderShopping();
   }
 }
 function fillCreatedBy(){
   const sel=$('#listCreatedBy');
   const cur=curList();
-  const opts='<option value="">— creada per —</option>'+S.people.map(p=>'<option'+(cur&&cur.createdBy===p.name?' selected':'')+'>'+esc(p.name)+'</option>').join('');
+  const meName=defaultCreatorName();
+  const opts='<option value="">— creada per —</option>'+S.people.map(p=>'<option value="'+esc(p.name)+'"'+(cur&&cur.createdBy===p.name?' selected':'')+'>'+esc(p.name)+(p.name===meName?' (jo)':'')+'</option>').join('');
   sel.innerHTML=opts;
 }
 function renderShopping(){
@@ -1969,6 +2026,15 @@ function renderListsCardsOnly(l){
   if(card)card.textContent=l.name;
 }
 $('#listCreatedBy').onchange=e=>{const l=curList();if(l){l.createdBy=e.target.value;save();renderLists();}};
+/* v85: desplegable multi "Qui la veu" de la llista (el creador sempre s'hi suma) */
+bindVisDD('listVisDD','listVisLbl',
+  function(){const l=curList();return l?(l.visibleTo||[]):[];},
+  function(v){
+    const l=curList();if(!l)return;
+    const me=S.currentUser||'';
+    l.visibleTo=v.length?[me].concat(v).filter((x,i,a)=>x&&a.indexOf(x)===i):[];
+    save();renderLists();
+  });
 $('#delListBtn').onclick=()=>{
   const l=curList();if(!l)return;
   if(!confirm('Esborrar la llista «'+l.name+'»?\n\nNo es perddrà: anirà a la paperera (Opcions → Llistes eliminades) durant 10 dies, i des d’allà la pots tornar a posar.'))return;
