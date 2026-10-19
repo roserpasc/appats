@@ -86,7 +86,7 @@ function defaultState(){
     shoppingLists:[],
     receipts:[],             /* {id,date,store,payerId,total,items:[{name,qty,unit,price}],photo} */
     settlements:[],          /* {date,fromId,toId,amount} */
-    settings:{apiKey:(window.MIDWEEK_OPENROUTER_KEY||''),model:'google/gemini-2.5-flash'},
+    settings:{apiKey:(window.APP_AI&&window.APP_AI.key)||'',model:(window.APP_AI&&window.APP_AI.model)||'mimo-v2.6-flash'},
     ui:{tab:'menu',weekStart:null},
     seedDone:false
   };
@@ -755,8 +755,14 @@ window.addEventListener('pageshow',()=>scheduleSync(0));
 
 S.shopping=S.shopping&&Array.isArray(S.shopping.items)?S.shopping:{items:[],stale:false};
 S.settings=Object.assign({apiKey:(window.MIDWEEK_OPENROUTER_KEY||''),model:'google/gemini-2.5-flash'},S.settings);
-/* models trencats desats -> gemini 2.5 flash (única opció vàlida) */
-if(['nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free','google/gemma-4-26b-a4b-it:free','google/gemma-3-27b-it:free'].indexOf(S.settings.model)>=0){S.settings.model='google/gemini-2.5-flash';}
+/* v86: la clau i el model d'IA vénen INCLOSOS a l'app (key.js, al repo) —
+   són la font única: el que hi hagi desat al navegador NO els pot substituir. */
+try{
+  if(window.APP_AI&&window.APP_AI.key)S.settings.apiKey=window.APP_AI.key;
+  if(window.APP_AI&&window.APP_AI.model)S.settings.model=window.APP_AI.model;
+}catch(e){}
+/* models trencats/desactualitzats -> el model que ve amb l'app */
+if(['nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free','google/gemma-4-26b-a4b-it:free','google/gemma-3-27b-it:free','google/gemini-2.5-flash'].indexOf(S.settings.model)>=0){S.settings.model=(window.APP_AI&&window.APP_AI.model)||'mimo-v2.6-flash';}
 /* snapshot de referència: sense ell el primer save() no detectaria res */
 try{refreshSnap();}catch(e){}
 

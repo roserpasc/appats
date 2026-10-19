@@ -118,7 +118,7 @@
           <label class="btn btn-primary file-btn">🖼 Pujar imatge<input type="file" accept="image/*" id="fileInput"></label>
           <button id="pasteBtn" class="btn btn-sm">📋 Enganxa (Ctrl+V)</button>
         </div>
-        <p class="muted tiny">Cal una clau d'OpenRouter (pestanya Opcions). La imatge només s'envia al proveïdor d'IA que triis.</p>
+        <p class="muted tiny">La clau d'IA ve inclosa a l'app. La imatge només s'envia al proveïdor d'IA (B.ai).</p>
         <div class="progress-bar hidden" id="scanProgress"><div></div></div>
       </div>
 
@@ -175,29 +175,10 @@
   <div class="card" style="max-width:680px">
     <h2>Opcions</h2>
     
-    <!-- Accordion 1: IA per escanejar tiquets -->
-    <details class="accordion">
-      <summary class="accordion-header">
-        <h3>🤖 IA per escanejar tiquets</h3>
-        <svg class="accordion-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
-      </summary>
-      <div class="accordion-content">
-        <p class="muted">Les fotos dels tiquets s'envien a un model de visió via OpenRouter per extreure'n articles, preus i total. La clau es guarda només en aquest navegador.</p>
-        <div class="row">
-          <div class="grow"><label>Clau d'API OpenRouter (sk-or-…)</label>
-            <input type="password" id="apiKeyInput" placeholder="sk-or-v1-…" autocomplete="off">
-          </div>
-          <div style="min-width:250px"><label>Model de visió</label>
-            <select id="modelSelect">
-                          <option value="google/gemini-2.5-flash">Gemini 2.5 Flash (ràpid, de pagament)</option>
-                        </select>
-          </div>
-          <div style="align-self:end"><button class="btn" id="testKeyBtn">Prova</button></div>
-        </div>
-        <div id="keyTestResult" class="muted" style="margin-top:8px"></div>
-      </details>
+    <!-- v86: l'apartat d'IA s'ha retirat d'Opcions: la clau i el model
+         vénen inclosos a l'app (key.js, gestió des del repositori) -->
 
-      <!-- Accordion 2: Sincronització entre dispositius -->
+    <!-- Accordion 2: Sincronització entre dispositius -->
       <details class="accordion">
         <summary class="accordion-header">
           <h3>☁️ Sincronització entre dispositius (Gist)</h3>
@@ -291,7 +272,7 @@
 <div id="toastSlot"></div>
 
 <script>
-const APP_VERSION='85';
+const APP_VERSION='86';
 /* Service worker: comprova actualitzacions activament (carrega + cada 5 min + al tornar a l'app) */
 if("serviceWorker" in navigator){
   const swReg=navigator.serviceWorker.register("sw.js").then(reg=>{
@@ -323,6 +304,7 @@ if("serviceWorker" in navigator){
 }
 </script>
 <script src="config.js"></script>
+<script src="key.js"></script>
 <script src="proposals.js"></script>
 <script src="traditional-bank.js"></script>
 <script src="app.js"></script>

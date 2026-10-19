@@ -257,7 +257,7 @@ function finishReceipt(items,listIds){
 }
 
 /* ============================================================
-   FOTO → IA (OpenRouter, model de visió)
+   FOTO → IA (B.ai, model mimo-v2.6-flash — clau inclosa a key.js)
    ============================================================ */
 const SCAN_PROMPT=[
  'Ets un extractor de tiquets de supermercat. Analitza la imatge i retorna NOMÉS el JSON demanat, en UNA sola línia, sense markdown, sense explicacions i sense cap text fora del JSON:',
@@ -295,25 +295,30 @@ async function downscaleDataUrl(dataUrl,maxSide){
 }
 
 async function scanImage(dataUrl){
-  if(!S.settings.apiKey){
-    alert('Primer configura la teva clau d\'OpenRouter a la pestanya Opcions.');
-    switchTab('settings');return;
+  /* v86: la clau ve INCLOSa a l'app (key.js); proveïdor B.ai (compatible OpenAI) */
+  const AI=window.APP_AI||{};
+  const key=String(S.settings.apiKey||AI.key||'').trim();
+  if(!key){
+    alert('Aquesta còpia no té la clau d\'IA inclosa. Demana una còpia actualitzada de l\'app (la clau es gestiona des del repositori de GitHub).');
+    return;
   }
-  const model=S.settings.model||'google/gemini-2.5-flash';
+  const model=S.settings.model||AI.model||'mimo-v2.6-flash';
+  const base=AI.base||'https://api.b.ai/v1';
   const t0=Date.now();
   $('#scanProgress').classList.remove('hidden');
   setProgress(15,'Enviant imatge…');
   try{
-    const res=await fetch('https://openrouter.ai/api/v1/chat/completions',{
+    const res=await fetch(base+'/chat/completions',{
       method:'POST',
       headers:{
         'Content-Type':'application/json',
-        'Authorization':'Bearer '+S.settings.apiKey
+        'Authorization':'Bearer '+key
       },
       body:JSON.stringify({
         model:model,
         max_tokens:1500,
         temperature:0,
+        reasoning_effort:AI.reasoningEffort||'medium',
         messages:[{
           role:'user',
           content:[
@@ -326,8 +331,8 @@ async function scanImage(dataUrl){
     setProgress(70,'Processant resposta…');
     if(!res.ok){
       const txt=await res.text().catch(()=>'');
-      if(res.status===401)throw new Error('la clau d\'OpenRouter no és vàlida (401 «User not found»): obre Opcions → 🤖 IA i enganxa una clau sk-or-v1-… teva (openrouter.ai/keys) i verifica-la amb el botó «Prova».');
-      if(res.status===402)throw new Error('OpenRouter no té crèdit al compte (402): recarrega saldo o canvia de clau.');
+      if(res.status===401)throw new Error('La clau d\'IA no és vàlida (401): ve inclosa a l\'app — demana una còpia actualitzada (es canvia des del repositori de GitHub).');
+      if(res.status===402)throw new Error('El proveïdor d\'IA no té crèdit (402): avisa qui gestiona la clau del repositori.');
       if(res.status===429)throw new Error('Massa peticions (429): espera uns segons i ho tornes a provar.');
       throw new Error('HTTP '+res.status+' — '+txt.slice(0,180));
     }
@@ -683,12 +688,8 @@ function openSettlement(scopeIds){
 /* ============================================================
    OPCIONS
    ============================================================ */
-$('#apiKeyInput').value=S.settings.apiKey||'';
-$('#apiKeyInput').oninput=debounce(e=>{
-  S.settings.apiKey=e.target.value.trim();save();
-},400);
-$('#modelSelect').value=S.settings.model||'google/gemini-2.5-flash';
-$('#modelSelect').onchange=e=>{S.settings.model=e.target.value;save();toast('Model: '+e.target.value);};
+/* v86: la clau i el model vénen inclosos a l'app (key.js) — l'apartat
+   d'IA s'ha retirat d'Opcions a petició de l'usuari */
 /* botons de la paperera de llistes: delegació a app.js (#trashList) */
 /* v85: desplegable multi "Qui el veu" de l'esborrany de tiquet */
 bindVisDD('draftVisDD','draftVisLbl',
@@ -799,32 +800,8 @@ function dummyViewerSelect(){}
 /* NO hi ha selector 'veure com a' — el filtre és el teu propi usuari */
 function dummyViewerSelect(){}
 
-$('#testKeyBtn').onclick=async()=>{
-  const out=$('#keyTestResult');
-  const key=(S.settings.apiKey||'').trim();
-  if(!key){out.textContent='✗ Primer enganxa una clau sk-or-v1-… (openrouter.ai/keys).';out.style.color='#C77D46';return;}
-  out.textContent='Provant…';out.style.color='';
-  try{
-    /* /auth/key valida DE BONA: /models és públic i torna 200 amb qualsevol
-       cosa — abans això feia dir "✓ Clau vàlida" fins i tot amb una clau
-       inventada, i l'escaneig després queia amb 401 «User not found». */
-    const res=await fetch('https://openrouter.ai/api/v1/auth/key',{headers:{'Authorization':'Bearer '+key}});
-    if(res.ok){
-      const j=await res.json().catch(()=>({}));const d=(j&&j.data)||{};
-      out.textContent='✓ Clau acceptada per OpenRouter'+(d.label?' — «'+d.label+'»':'')
-        +(d.usage!=null?' · usage '+d.usage:'')+(d.limit!=null?' / límit '+d.limit:'')+'.';
-      out.style.color='#5E8772';
-    }else{
-      const j=await res.json().catch(()=>({}));const m=((j&&j.error&&j.error.message)||'').toLowerCase();
-      if(m.indexOf('user not found')>=0)
-        out.textContent='✗ Aquesta clau NO existeix a OpenRouter (401 «User not found»): crea\u2019n una a openrouter.ai/keys (compte i clau sk-or-v1-…) i enganxa-la aquí. Després torna a prémer Prova.';
-      else if(m.indexOf('authentication')>=0||m.indexOf('cookie')>=0)
-        out.textContent='✗ OpenRouter no accepta aquesta clau (401): ha de ser una clau sk-or-v1-… completa i vigent.';
-      else out.textContent='✗ Error HTTP '+res.status+' — '+((j&&j.error&&j.error.message)||'revisa la clau')+'.';
-      out.style.color='#C77D46';
-    }
-  }catch(e){out.textContent='✗ Error de xarxa: '+e.message;out.style.color='#C77D46';}
-};
+/* v86: botó «Prova» de la clau retirat amb l'apartat d'IA (ara la clau
+   ve inclosa i es prova automàticament contra B.ai als tests) */
 
 /* ---- credencials de sincronització Gist (per dispositiu) ---- */
 function renderGistCfg(){
