@@ -1958,7 +1958,7 @@ function renderLists(){
       +'<span class="dotc" style="background:'+(l.id===curListId?'var(--accent)':'var(--line)')+'"></span>'
       +'<div style="flex:1;min-width:0"><b>'+esc(l.name)+'</b>'+lock+' '+by
       +'<div class="tiny muted">'+l.items.length+' productes · '+pend+' pendents</div></div>'
-      +'<button class="btn btn-sm" data-openlist="'+l.id+'">Obre</button></div>';
+      +'<button class="btn btn-sm" data-openlist="'+l.id+'">'+(l.id===curListId?'✕ Tanca':'Obre')+'</button></div>';
   }).join('');
   const cur=curList();
   const curOk=cur&&canSeeList(cur,viewer);
@@ -2014,10 +2014,12 @@ function fmtQty(i){return String(i.qty).replace('.',',');}
 $('#listsWrap').addEventListener('click',e=>{
   const open=e.target.closest('[data-openlist]');
   const card=e.target.closest('.list-card');
-  if(open||card){
-    curListId=(open||card).dataset.list||(card&&card.dataset.list);
-    save();renderLists();
-  }
+  const el=open||card;
+  if(!el)return;
+  const id=el.dataset.list||(card&&card.dataset.list);
+  /* v87: prémer la llista OBERTA la tanca — el mateix gest obre i tanca */
+  curListId=(id===curListId)?null:id;
+  save();renderLists();
 });
 $('#newListBtn').onclick=()=>{ensureList();toast('Llista creada — posa-li nom');};
 $('#listNameInput').oninput=e=>{

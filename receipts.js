@@ -307,65 +307,79 @@ async function scanImage(dataUrl){
   const t0=Date.now();
   $('#scanProgress').classList.remove('hidden');
   setProgress(15,'Enviant imatge…');
+  /* v87: amb esforç 'medium' el model es queda hores pensant i torna el contingut
+     BUIT o truncat (mesurat: 1/6 amb tiquets reals vs 6/6 amb 'minimal'). Es prova
+     fins a 3 vegades: dues amb l'esforç de key.js i l'última sense raonament. */
+  const efforts=[AI.reasoningEffort||'minimal',AI.reasoningEffort||'minimal',''];
   try{
-    const res=await fetch(base+'/chat/completions',{
-      method:'POST',
-      headers:{
-        'Content-Type':'application/json',
-        'Authorization':'Bearer '+key
-      },
-      body:JSON.stringify({
-        model:model,
-        max_tokens:1500,
-        temperature:0,
-        reasoning_effort:AI.reasoningEffort||'medium',
-        messages:[{
-          role:'user',
-          content:[
-            {type:'text',text:SCAN_PROMPT},
-            {type:'image_url',image_url:{url:dataUrl}}
-          ]
-        }]
-      })
-    });
-    setProgress(70,'Processant resposta…');
-    if(!res.ok){
-      const txt=await res.text().catch(()=>'');
-      if(res.status===401)throw new Error('La clau d\'IA no és vàlida (401): ve inclosa a l\'app — demana una còpia actualitzada (es canvia des del repositori de GitHub).');
-      if(res.status===402)throw new Error('El proveïdor d\'IA no té crèdit (402): avisa qui gestiona la clau del repositori.');
-      if(res.status===429)throw new Error('Massa peticions (429): espera uns segons i ho tornes a provar.');
-      throw new Error('HTTP '+res.status+' — '+txt.slice(0,180));
+    let lastMsg='La IA no ha retornat JSON llegible.';
+    for(let ai=0;ai<efforts.length;ai++){
+      const effort=efforts[ai];
+      if(ai)setProgress(30+ai*15,'Tornem-ho a provar…');
+      const body={model:model,max_tokens:AI.maxTokens||4000,temperature:0,
+        messages:[{role:'user',content:[{type:'text',text:SCAN_PROMPT},{type:'image_url',image_url:{url:dataUrl}}]}]};
+      if(effort)body.reasoning_effort=effort;
+      let res;
+      try{
+        res=await fetch(base+'/chat/completions',{
+          method:'POST',
+          headers:{'Content-Type':'application/json','Authorization':'Bearer '+key},
+          body:JSON.stringify(body)
+        });
+      }catch(e){lastMsg='Error de xarxa: '+e.message;continue;}
+      if(!res.ok){
+        const txt=await res.text().catch(()=>'');
+        if(res.status===401)throw new Error('La clau d\'IA no és vàlida (401): ve inclosa a l\'app — demana una còpia actualitzada (es canvia des del repositori de GitHub).');
+        if(res.status===402)throw new Error('El proveïdor d\'IA no té crèdit (402): avisa qui gestiona la clau del repositori.');
+        if(res.status===429){lastMsg='Massa peticions (429): espera uns segons i ho tornes a provar.';continue;}
+        lastMsg='HTTP '+res.status+' — '+txt.slice(0,180);continue;
+      }
+      setProgress(70,'Processant resposta…');
+      const data=await res.json().catch(()=>({}));
+      const ch0=(data.choices&&data.choices[0])||{};
+      const raw=ch0.message?ch0.message.content:'';
+      const content=Array.isArray(raw)?raw.map(p=>(p&&p.text)||'').join(''):String(raw||'');
+      if(!content.trim()){
+        lastMsg='La IA ha acabat pensant sense contestar (buit). Torna-ho a provar.';continue;
+      }
+      let jsonStr=extractJson(content);
+      if(jsonStr)jsonStr=repairJson(jsonStr);
+      if(!jsonStr){
+        lastMsg='La IA ha tornat text sense JSON ('+(ch0.finish_reason||'?')+'). Torna-ho a provar.';continue;
+      }
+      let parsed;
+      try{parsed=JSON.parse(jsonStr);}
+      catch(e){lastMsg='JSON incomplet de la IA. Torna-ho a provar.';continue;}
+      const items=(parsed.items||[]).map(i=>({
+        name:String(i.name||'').trim(),
+        qty:parseNum(i.qty),
+        unit:i.unit?String(i.unit):'',
+        price:parseNum(i.price)
+      })).filter(i=>i.name);
+      if(!items.length){
+        lastMsg='No s\'ha detectat cap article llegible: prova amb més llum o més a prop.';continue;
+      }
+      if(!draft)draft={photo:null,date:todayIso(),store:'',payerId:S.currentUser||(S.people[0]||{}).id,items:[],fromLists:[],ai:null};
+      if(draft.photo&&draft.photo!==dataUrl)draft.items=[];
+      draft.photo=dataUrl;
+      draft.store=parsed.store||draft.store||'';
+      if(parsed.date&&/^\d{4}-\d{2}-\d{2}$/.test(parsed.date))draft.date=parsed.date;
+      draft.items=items;
+      const sum=items.reduce((a,i)=>a+(i.price||0),0);
+      let warn=null;
+      if(parsed.total&&Math.abs(sum-parsed.total)>0.05*parsed.total)
+        warn='la suma de línies ('+sum.toFixed(2)+'€) difereix del total del tiquet ('+parsed.total.toFixed(2)+'€)';
+      else if(!parsed.total)
+        warn='el total del tiquet no s\'ha pogut llegir';
+      draft.ai={model:model.split('/').pop(),msec:Date.now()-t0,warn:warn};
+      renderDraft();
+      toast('Escanejat ✓ '+items.length+' articles');
+      return;
     }
-    const data=await res.json();
-    const content=data.choices?.[0]?.message?.content||'';
-    const jsonStr=extractJson(content);
-    if(!jsonStr)throw new Error('La IA no ha retornat JSON reconeixible.');
-    const parsed=JSON.parse(jsonStr);
-    const items=(parsed.items||[]).map(i=>({
-      name:String(i.name||'').trim(),
-      qty:parseNum(i.qty),
-      unit:i.unit?String(i.unit):'',
-      price:parseNum(i.price)
-    })).filter(i=>i.name);
-    if(!items.length)throw new Error('No s\'ha detectat cap article llegible.');
-    if(!draft)draft={photo:null,date:todayIso(),store:'',payerId:S.currentUser||(S.people[0]||{}).id,items:[],fromLists:[],ai:null};
-    if(draft.photo&&draft.photo!==dataUrl)draft.items=[];
-    draft.photo=dataUrl;
-    draft.store=parsed.store||draft.store||'';
-    if(parsed.date&&/^\d{4}-\d{2}-\d{2}$/.test(parsed.date))draft.date=parsed.date;
-    draft.items=items;
-    const sum=items.reduce((a,i)=>a+(i.price||0),0);
-    let warn=null;
-    if(parsed.total&&Math.abs(sum-parsed.total)>0.05*parsed.total)
-      warn='la suma de línies ('+sum.toFixed(2)+'€) difereix del total del tiquet ('+parsed.total.toFixed(2)+'€)';
-    else if(!parsed.total)
-      warn='el total del tiquet no s\'ha pogut llegir';
-    draft.ai={model:model.split('/').pop(),msec:Date.now()-t0,warn:warn};
-    renderDraft();
-    toast('Escanejat ✓ '+items.length+' articles');
+    throw new Error(lastMsg);
   }catch(err){
     console.error(err);
-    toast('Error escanejant: '+err.message,4200);
+    toast('Error escanejant: '+err.message,6000);
   }finally{
     setProgress(100);
     setTimeout(()=>{$('#scanProgress').classList.add('hidden');setProgress(0);},600);
@@ -380,6 +394,36 @@ function extractJson(text){
   if(fenced)return fenced[1].trim();
   const first=text.indexOf('{'),last=text.lastIndexOf('}');
   if(first>=0&&last>first)return text.slice(first,last+1);
+  return null;
+}
+/* v87: el model de vegades queda a MEITAT del JSON (finish=length). Tanca el que
+   sigui obert (cadena, claus, colzes) i, si encara no parseja, retalla l'últim
+   fragment incomplet fins a trobar JSON válido. Retorna null si és irrecuperable. */
+function repairJson(s){
+  const tryParse=t=>{try{JSON.parse(t);return t;}catch(e){return null;}};
+  const close=t=>{
+    let inStr=false,esc=false;const st=[];
+    for(const ch of t){
+      if(esc){esc=false;continue;}
+      if(ch==='\\'){esc=true;continue;}
+      if(ch==='"'){inStr=!inStr;continue;}
+      if(inStr)continue;
+      if(ch==='{')st.push('}');
+      else if(ch==='[')st.push(']');
+    }
+    let r=t;
+    if(inStr)r+='"';
+    return r+st.reverse().join('');
+  };
+  let a=tryParse(s);if(a)return a;
+  a=tryParse(close(s.replace(/,\s*$/,'')));if(a)return a;
+  let out=s;
+  for(let i=0;i<5;i++){
+    const idx=Math.max(out.lastIndexOf(','),out.lastIndexOf(':'));
+    if(idx<10)return null;
+    out=out.slice(0,idx).replace(/[,:]\s*$/,'');
+    a=tryParse(close(out));if(a)return a;
+  }
   return null;
 }
 
