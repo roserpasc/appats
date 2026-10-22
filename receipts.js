@@ -264,6 +264,7 @@ const SCAN_PROMPT=[
  '{"store":"nom del comerç","date":"YYYY-MM-DD o null","total":numero,"items":[{"name":"nom curt del producte en català","qty":numero_o_null,"unit":"kg|g|l|unitats|null","price":numero}]}',
  'Regles:',
  '- Un element per producte; si el tiquet mostra pes i preu/kg, posa qty en kg amb unit "kg".',
+ '- Si la línia mostra quantitat (p. ex. «2x», «1,24 kg»), posa-la a qty com a NOMBRE i tria unit: «kg» si és pes, «unitats» si és nombre. NO deixis qty null si la línia en mostra una.',
  '- price = preu total de la línia en euros (número, no text).',
  '- No inventis productes illegibles: si no es pot llegir, omiteix-lo.',
  '- Inclou descomptes com a item amb price negatiu si figuren.',
